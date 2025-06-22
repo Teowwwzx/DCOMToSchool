@@ -13,7 +13,14 @@ public class Server {
             Registry registry = LocateRegistry.createRegistry(1099);
 
             // 3. Bind our remote object to the registry with a name
-            registry.bind("com.wipro.payroll.common.PayrollService", payrollService);
+            registry.bind("PayrollService", payrollService);
+
+            System.out.println("✅ Payroll RMI Server is running and ready.");
+            System.out.println("   Listening on port 1099...");
+
+            System.out.println("\n[Server is active. Press the red 'Stop' button in IntelliJ to shut down]");
+
+            Thread.sleep(Long.MAX_VALUE);
         } catch (Exception e) {
             System.err.println("com.wipro.payroll.server.Server exception: " + e.toString());
             e.printStackTrace();
