@@ -18,9 +18,9 @@ public class PayrollServiceImpl extends UnicastRemoteObject implements PayrollSe
     public PayrollServiceImpl() throws RemoteException {
         super();
         try {
-            String dbUrl = "jdbc:postgresql://localhost:5432/postgres";
-            String dbUser = "postgres";
-            String dbPassword = "Tzx@0301000301!";
+            String dbUrl = "jdbc:postgresql://ep-withered-flower-a811hc2n-pooler.eastus2.azure.neon.tech:5432/neondb?sslmode=require&channel_binding=require";
+            String dbUser = "neondb_owner";
+            String dbPassword = "npg_4A1VduWMcaYT";
             dbConnection = DriverManager.getConnection(dbUrl, dbUser, dbPassword);
             System.out.println("✅ Successfully connected to the PostgreSQL database.");
         } catch (SQLException e) {
@@ -32,7 +32,9 @@ public class PayrollServiceImpl extends UnicastRemoteObject implements PayrollSe
     @Override
     public User login(String username, String password) throws RemoteException {
         System.out.println("[SERVER] Login attempt for username: " + username);
-        String sql = "SELECT * FROM \"user\" WHERE username = ? AND status = 'ACTIVE'";
+        String sql = "SELECT u.*, jt.dept_id FROM \"user\" u " +
+                "LEFT JOIN \"job_titles\" jt ON u.job_title_id = jt.id " +
+                "WHERE u.username = ? AND u.status = 'ACTIVE'";
 
         try (PreparedStatement stmt = dbConnection.prepareStatement(sql)) {
             stmt.setString(1, username);
@@ -40,10 +42,21 @@ public class PayrollServiceImpl extends UnicastRemoteObject implements PayrollSe
 
             if (rs.next()) {
                 String storedHash = rs.getString("pwd_hash");
+                String status = rs.getString("status");
+
+                if (!status.equals("ACTIVE")) {
+                    System.out.println("[SERVER] Login failed: User '" + username + "' found, but their account status is '" + status + "'.");
+                    return null; // For security, send a generic message to the client
+                }
+
                 if (BCrypt.checkpw(password, storedHash)) {
                     int userId = rs.getInt("id");
                     System.out.println("[SERVER] Login successful for user ID: " + userId);
                     return buildUserFromResultSet(rs); // Use a helper to build the full User object
+                } else {
+                    // PASSWORD IS WRONG!
+                    System.out.println("[SERVER] Login failed: User '" + username + "' found, but the password was incorrect.");
+                    return null;
                 }
             }
         } catch (SQLException e) {
@@ -51,7 +64,7 @@ public class PayrollServiceImpl extends UnicastRemoteObject implements PayrollSe
             throw new RemoteException("Database error during login for user: " + username, e);
         }
 
-        System.out.println("[SERVER] Login failed for username: " + username);
+        System.out.println("[SERVER] Login failed for username: " + username + password);
         return null; // Return null if user not found or password incorrect
     }
 
@@ -293,7 +306,7 @@ public class PayrollServiceImpl extends UnicastRemoteObject implements PayrollSe
         user.setFirstName(rs.getString("f_name"));
         user.setLastName(rs.getString("l_name"));
         user.setEmail(rs.getString("email"));
-        user.setPhoneNumber(rs.getString("phone_number"));
+        user.setPhoneNumber(rs.getString("phone"));
         user.setIc(rs.getString("ic"));
         // ... set other fields
 
@@ -380,5 +393,77 @@ public class PayrollServiceImpl extends UnicastRemoteObject implements PayrollSe
         payslip.setGrossEarnings(gross);
         payslip.setTotalDeductions(deductions);
         payslip.setNetPay(gross.subtract(deductions));
+    }
+
+    // Add these to PayrollServiceImpl.java
+
+    @Override
+    public List<JobTitle> getAllJobTitles(int adminUserId) throws RemoteException {
+        if (!isUserInRole(adminUserId, "HR")) {
+            throw new SecurityException("User does not have permission to view job titles.");
+        }
+        List<JobTitle> jobTitles = new ArrayList<>();
+        String sql = "SELECT * FROM \"job_titles\" ORDER BY dept_id, level";
+        try (Statement stmt = dbConnection.createStatement(); ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                JobTitle jobTitle = new JobTitle();
+                jobTitle.setId(rs.getInt("id"));
+                jobTitle.setDeptId(rs.getInt("dept_id"));
+                jobTitle.setTitle(rs.getString("title"));
+                jobTitle.setLevel(rs.getString("level"));
+                jobTitles.add(jobTitle);
+            }
+        } catch (SQLException e) {
+            throw new RemoteException("Error fetching job titles.", e);
+        }
+        return jobTitles;
+    }
+
+    @Override
+    public boolean updatePayTemplateItem(int adminUserId, int payTemplateItemId, BigDecimal newAmount) throws RemoteException {
+        if (!isUserInRole(adminUserId, "HR")) {
+            throw new SecurityException("User does not have permission to update pay templates.");
+        }
+        String sql = "UPDATE \"pay_templates\" SET amount = ? WHERE id = ?";
+        try (PreparedStatement stmt = dbConnection.prepareStatement(sql)) {
+            stmt.setBigDecimal(1, newAmount);
+            stmt.setInt(2, payTemplateItemId);
+            int rowsAffected = stmt.executeUpdate();
+            return rowsAffected > 0;
+        } catch (SQLException e) {
+            throw new RemoteException("Error updating pay template item.", e);
+        }
+    }
+
+    // Add this method to PayrollServiceImpl.java
+
+    @Override
+    public List<PayTemplate> getPayTemplatesForJobTitle(int adminUserId, int jobTitleId) throws RemoteException {
+        if (!isUserInRole(adminUserId, "HR")) {
+            throw new SecurityException("User does not have permission to view pay templates.");
+        }
+
+        List<PayTemplate> templates = new ArrayList<>();
+        String sql = "SELECT * FROM \"pay_templates\" WHERE job_title_id = ?";
+
+        try (PreparedStatement stmt = dbConnection.prepareStatement(sql)) {
+            stmt.setInt(1, jobTitleId);
+            ResultSet rs = stmt.executeQuery();
+
+            while (rs.next()) {
+                PayTemplate item = new PayTemplate();
+                item.setId(rs.getInt("id"));
+                item.setJob_title_id(rs.getInt("job_title_id"));
+                item.setDescription(rs.getString("description"));
+                // Convert the String from the DB back to a PayItemType enum
+                item.setType(PayItemType.valueOf(rs.getString("type")));
+                item.setAmount(rs.getBigDecimal("amount"));
+                templates.add(item);
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+            throw new RemoteException("Error fetching pay templates for job title ID: " + jobTitleId, e);
+        }
+        return templates;
     }
 }

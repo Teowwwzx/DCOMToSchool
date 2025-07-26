@@ -2,6 +2,7 @@ package com.wipro.payroll.client;
 
 import com.wipro.payroll.common.*;
 
+import java.math.BigDecimal;
 import java.rmi.RemoteException;
 import java.rmi.registry.LocateRegistry;
 import java.rmi.registry.Registry;
@@ -142,6 +143,7 @@ public class Client {
             System.out.println("1. Run Monthly Payroll for All Employees");
             System.out.println("2. List All Users");
             System.out.println("3. Register New User");
+            System.out.println("4. Manage Compensation Templates"); // <-- NEW OPTION
             System.out.println("9. Switch to Employee View");
             System.out.println("0. Logout");
             System.out.print("Choose an option: ");
@@ -157,6 +159,8 @@ public class Client {
                 case "3":
                     handleHrRegisterUser();
                     break;
+                case "4":
+                    handleManageCompensation();
                 case "9":
                     showEmployeeMenu(true); // Pass true to show "Return to HR Menu"
                     break;
@@ -390,5 +394,71 @@ public class Client {
         System.out.println("==================================================");
         System.out.printf("  %-28s %15.2f%n", "NET PAY:", payslip.getNetPay());
         System.out.println("==================================================");
+    }
+
+    // Add this new helper method to Client.java
+
+    private static void handleManageCompensation() {
+        if (!hasRole(loggedInUser, "HR")) {
+            System.out.println("❌ You do not have permission to perform this action.");
+            return;
+        }
+
+        try {
+            System.out.println("\n--- Manage Compensation Templates ---");
+            // Step 1: Display all job titles
+            List<JobTitle> jobTitles = payrollService.getAllJobTitles(loggedInUser.getId());
+            if (jobTitles.isEmpty()) {
+                System.out.println("No job titles found.");
+                return;
+            }
+            System.out.println("Available Job Titles:");
+            for (JobTitle job : jobTitles) {
+                System.out.printf("  ID: %d, Title: %s %s (Dept ID: %d)\n",
+                        job.getId(), job.getLevel(), job.getTitle(), job.getDeptId());
+            }
+
+            // Step 2: Ask HR to select a job title
+            System.out.print("\nEnter the ID of the job title to view/edit: ");
+            int jobTitleId = Integer.parseInt(scanner.nextLine());
+
+            // Step 3: Fetch and display the compensation components for that title
+            List<PayTemplate> templates = payrollService.getPayTemplatesForJobTitle(loggedInUser.getId(), jobTitleId);
+            if (templates.isEmpty()) {
+                System.out.println("No compensation template found for this job title.");
+                return;
+            }
+
+            System.out.println("\nCurrent Compensation Package:");
+            for (PayTemplate item : templates) {
+                System.out.printf("  Item ID: %d, Description: %s, Type: %s, Amount: RM %.2f\n",
+                        item.getId(), item.getDescription(), item.getType(), item.getAmount());
+            }
+
+            // Step 4: Ask if they want to edit
+            System.out.print("\nDo you want to edit an item? (y/n): ");
+            if (!scanner.nextLine().equalsIgnoreCase("y")) {
+                return;
+            }
+
+            System.out.print("Enter the Item ID to update: ");
+            int templateItemId = Integer.parseInt(scanner.nextLine());
+
+            System.out.print("Enter the new Amount (e.g., 8500.00): ");
+            BigDecimal newAmount = new BigDecimal(scanner.nextLine());
+
+            // Step 5: Call the RMI method to perform the update
+            boolean success = payrollService.updatePayTemplateItem(loggedInUser.getId(), templateItemId, newAmount);
+            if (success) {
+                System.out.println("✅ Successfully updated the compensation template.");
+            } else {
+                System.out.println("❌ Failed to update the item. Please check the ID.");
+            }
+
+        } catch (NumberFormatException e) {
+            System.err.println("❌ Invalid input. Please enter a number.");
+        } catch (RemoteException e) {
+            System.err.println("❌ An error occurred: " + e.getMessage());
+        }
     }
 }
