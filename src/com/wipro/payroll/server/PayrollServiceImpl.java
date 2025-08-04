@@ -245,7 +245,11 @@ public class PayrollServiceImpl extends UnicastRemoteObject implements PayrollSe
         }
     }
 
-    // --- HR METHODS ---
+
+    // =================================================================
+    //  HR Administrator Methods
+    // =================================================================
+
     @Override
     public String createUser(int actorUserId, User newUser, String password) throws RemoteException {
         // Step 1: Security Check - Ensure the person creating the user has the HR role.
@@ -263,9 +267,6 @@ public class PayrollServiceImpl extends UnicastRemoteObject implements PayrollSe
         String sql = "INSERT INTO public.\"user\" (job_title_id, emp_type_id, username, f_name, l_name, email, phone, ic, pwd_hash, status, role) " +
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', 'EMPLOYEE')"; // New users default to EMPLOYEE role
 
-        // =========================================================================
-        //  DEBUGGING: Print all values just before executing the database query
-        // =========================================================================
         System.out.println("\n--- DEBUG: Attempting to create user with the following data ---");
         System.out.println("Actor (HR) User ID: " + actorUserId);
         System.out.println("Job Title ID: " + newUser.getJobTitleId());
@@ -318,7 +319,6 @@ public class PayrollServiceImpl extends UnicastRemoteObject implements PayrollSe
             throw new RemoteException("An error occurred during user creation.", e);
         }
     }
-
 
     @Override
     public List<User> readAllUsers(int actorUserId) throws RemoteException {
@@ -495,7 +495,6 @@ public class PayrollServiceImpl extends UnicastRemoteObject implements PayrollSe
         return empTypes;
     }
 
-
     @Override
     public List<PayTemplate> getPayTemplatesForJobTitle(int actorUserId, int jobTitleId) throws RemoteException {
         // Add security check for HR role here
@@ -534,8 +533,6 @@ public class PayrollServiceImpl extends UnicastRemoteObject implements PayrollSe
             throw new RemoteException("Error updating pay template item", e);
         }
     }
-
-    // Add these two new methods to your PayrollServiceImpl.java class
 
     @Override
     public PayTemplate addPayTemplateItem(int actorUserId, PayTemplate newItem) throws RemoteException {
@@ -577,8 +574,6 @@ public class PayrollServiceImpl extends UnicastRemoteObject implements PayrollSe
             throw new RemoteException("Error deleting pay template item", e);
         }
     }
-
-    // In PayrollServiceImpl.java
 
     @Override
     public String runMonthlyPayroll(int actorUserId, int year, int month) throws RemoteException {
@@ -646,8 +641,6 @@ public class PayrollServiceImpl extends UnicastRemoteObject implements PayrollSe
         System.out.println(summary);
         return summary;
     }
-
-    // In PayrollServiceImpl.java, PLEASE REPLACE the entire method with this correct version.
 
     private void processPayrollForEmployee(User employee, LocalDate startDate, LocalDate endDate) throws SQLException {
         List<PayItem> finalPayItems = new ArrayList<>();
@@ -846,5 +839,324 @@ public class PayrollServiceImpl extends UnicastRemoteObject implements PayrollSe
         }
         return summaries;
     }
+
+
+    @Override
+    public String runMonthlyPayrollForTarget(int actorUserId, int year, int month, int targetUserId) throws RemoteException {
+        // 1. Security Check for HR role
+        try {
+            if (!checkUserRole(actorUserId, Role.HR)) {
+                throw new SecurityException("Access Denied: You do not have HR privileges to run payroll.");
+            }
+        } catch (SQLException e) {
+            throw new RemoteException("Could not verify user permissions.", e);
+        }
+
+        // 2. Setup pay period and fetch eligible employees
+        LocalDate payPeriodStart = LocalDate.of(year, month, 1);
+        List<User> employeesToPay = new ArrayList<>();
+
+        // Start with the base SQL query
+        StringBuilder fetchUsersSql = new StringBuilder(
+                "SELECT id, username, f_name, l_name, job_title_id, emp_type_id FROM public.\"user\" WHERE status = 'ACTIVE'"
+        );
+
+        // SECURELY add the condition if we are targeting a single user
+        if (targetUserId != 0) {
+            fetchUsersSql.append(" AND id = ?");
+        }
+
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement ps = conn.prepareStatement(fetchUsersSql.toString())) {
+
+            // Set the parameter ONLY if we're fetching a single user
+            if (targetUserId != 0) {
+                ps.setInt(1, targetUserId);
+            }
+
+            ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+                User u = new User();
+                u.setId(rs.getInt("id"));
+                u.setUsername(rs.getString("username"));
+                u.setJobTitleId(rs.getInt("job_title_id"));
+                u.setEmpTypeId(rs.getInt("emp_type_id"));
+                employeesToPay.add(u);
+            }
+        } catch (SQLException e) {
+            throw new RemoteException("Could not fetch list of employees.", e);
+        }
+
+        // 3. Loop through the list (which is either ALL users or just ONE user) and process payroll
+        int successCount = 0;
+        int failureCount = 0;
+        int skippedCount = 0;
+
+        for (User employee : employeesToPay) {
+            try (Connection conn = DatabaseManager.getConnection()) {
+                // Check if a payslip already exists for this user and period to prevent duplicates
+                String checkSql = "SELECT id FROM payslip WHERE user_id = ? AND pay_period_start_date = ?";
+                PreparedStatement checkPs = conn.prepareStatement(checkSql);
+                checkPs.setInt(1, employee.getId());
+                checkPs.setDate(2, java.sql.Date.valueOf(payPeriodStart));
+                if (checkPs.executeQuery().next()) {
+                    System.out.printf("Skipping %s: Payslip for this period already exists.\n", employee.getUsername());
+                    skippedCount++;
+                    continue; // Move to the next employee
+                }
+
+                // If it doesn't exist, process it using our existing helper method
+                processPayrollForEmployee(employee, payPeriodStart, payPeriodStart.withDayOfMonth(payPeriodStart.lengthOfMonth()));
+                System.out.printf("Successfully processed payroll for: %s\n", employee.getUsername());
+                successCount++;
+            } catch (Exception e) {
+                System.err.printf("!!! FAILED to process payroll for %s: %s\n", employee.getUsername(), e.getMessage());
+                failureCount++;
+            }
+        }
+
+        // 4. Return a final summary
+        String target = targetUserId == 0 ? "all employees" : "user ID " + targetUserId;
+        String summary = String.format("Payroll run for %d-%02d for %s complete. Processed: %d, Skipped: %d, Failed: %d.",
+                year, month, target, successCount, skippedCount, failureCount);
+        System.out.println(summary);
+        return summary;
+    }
+
+    @Override
+    public List<Bonus> getAllPendingBonuses(int actorUserId) throws RemoteException {
+        // Security Check for HR Role
+        try {
+            if (!checkUserRole(actorUserId, Role.HR)) {
+                throw new SecurityException("Access Denied: You do not have HR privileges.");
+            }
+        } catch (SQLException e) { throw new RemoteException("Could not verify user permissions.", e); }
+
+        List<Bonus> pendingList = new ArrayList<>();
+        String sql = "SELECT b.id, b.user_id, u.f_name, u.l_name, b.pay_period_start_date, b.name, b.amount " +
+                "FROM public.bonuses b JOIN public.\"user\" u ON b.user_id = u.id " +
+                "WHERE b.is_approved = false ORDER BY b.pay_period_start_date, u.l_name";
+
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ResultSet rs = ps.executeQuery();
+            while(rs.next()) {
+                Bonus bonus = new Bonus();
+                bonus.setId(rs.getInt("id"));
+                bonus.setEmployeeName(rs.getString("f_name") + " " + rs.getString("l_name"));
+                bonus.setPayPeriodStartDate(rs.getDate("pay_period_start_date").toLocalDate());
+                bonus.setName(rs.getString("name"));
+                bonus.setAmount(rs.getBigDecimal("amount"));
+                pendingList.add(bonus);
+            }
+        } catch (SQLException e) {
+            throw new RemoteException("Error fetching pending bonuses.", e);
+        }
+        return pendingList;
+    }
+
+    // =================================================================
+    //  MANAGER Administrator Methods
+    // =================================================================
+
+    @Override
+    public List<User> getMyDepartmentEmployees(int actorUserId) throws RemoteException {
+        // 1. Security Check: Ensure the user is a Manager
+        try {
+            if (!checkUserRole(actorUserId, Role.MANAGER)) {
+                throw new SecurityException("Access Denied: You do not have Manager privileges.");
+            }
+        } catch (SQLException e) {
+            throw new RemoteException("Could not verify user permissions.", e);
+        }
+
+        List<User> departmentEmployees = new ArrayList<>();
+
+        try (Connection conn = DatabaseManager.getConnection()) {
+            // 2. First, find out which department the manager (actorUserId) belongs to.
+            int departmentId = -1;
+            String findDeptSql = "SELECT j.dept_id FROM public.\"user\" u " +
+                    "JOIN public.job_titles j ON u.job_title_id = j.id WHERE u.id = ?";
+
+            try (PreparedStatement ps = conn.prepareStatement(findDeptSql)) {
+                ps.setInt(1, actorUserId);
+                ResultSet rs = ps.executeQuery();
+                if (rs.next()) {
+                    departmentId = rs.getInt("dept_id");
+                } else {
+                    throw new RemoteException("Could not find department for manager ID: " + actorUserId);
+                }
+            }
+
+            // 3. Now, fetch all employees who belong to that departmentId.
+            String fetchEmployeesSql = "SELECT u.id, u.username, u.f_name, u.l_name, j.title, j.level " +
+                    "FROM public.\"user\" u " +
+                    "JOIN public.job_titles j ON u.job_title_id = j.id " +
+                    "WHERE j.dept_id = ? ORDER BY u.id ASC";
+
+            try (PreparedStatement ps = conn.prepareStatement(fetchEmployeesSql)) {
+                ps.setInt(1, departmentId);
+                ResultSet rs = ps.executeQuery();
+                while(rs.next()) {
+                    User user = new User();
+                    user.setId(rs.getInt("id"));
+                    user.setUsername(rs.getString("username"));
+                    user.setFName(rs.getString("f_name"));
+                    user.setLName(rs.getString("l_name"));
+                    user.setJobTitle(rs.getString("title") + " (" + rs.getString("level") + ")");
+                    departmentEmployees.add(user);
+                }
+            }
+
+        } catch (SQLException e) {
+            e.printStackTrace();
+            throw new RemoteException("An error occurred while fetching the department report.", e);
+        }
+
+        return departmentEmployees;
+    }
+
+    @Override
+    public PayrollSummaryReport getPayrollSummaryReport(int actorUserId, int year, int month) throws RemoteException {
+        try {
+            if (!checkUserRole(actorUserId, Role.HR)) {
+                throw new SecurityException("Access Denied: You do not have HR privileges.");
+            }
+        } catch (SQLException e) {
+            throw new RemoteException("Could not verify user permissions.", e);
+        }
+
+        PayrollSummaryReport report = new PayrollSummaryReport();
+        report.setPayPeriod(LocalDate.of(year, month, 1));
+
+        String summarySql = "SELECT COUNT(id) AS employees_paid, SUM(gross_earnings) AS total_gross, " +
+                "SUM(total_deductions) AS total_deduct, SUM(net_pay) AS total_net " +
+                "FROM public.payslip " +
+                "WHERE date_part('year', pay_period_start_date) = ? AND date_part('month', pay_period_start_date) = ?";
+
+        String breakdownSql = "SELECT d.name AS department_name, SUM(p.net_pay) AS department_net_pay " +
+                "FROM public.payslip p " +
+                "JOIN public.\"user\" u ON p.user_id = u.id " +
+                "JOIN public.job_titles j ON u.job_title_id = j.id " +
+                "JOIN public.departments d ON j.dept_id = d.id " +
+                "WHERE date_part('year', p.pay_period_start_date) = ? AND date_part('month', p.pay_period_start_date) = ? " +
+                "GROUP BY d.name ORDER BY d.name";
+
+        try (Connection conn = DatabaseManager.getConnection()) {
+            // Execute first query for overall totals
+            try (PreparedStatement ps = conn.prepareStatement(summarySql)) {
+                ps.setInt(1, year);
+                ps.setInt(2, month);
+                ResultSet rs = ps.executeQuery();
+                if (rs.next()) {
+                    report.setNumberOfEmployeesPaid(rs.getInt("employees_paid"));
+                    report.setTotalGrossEarnings(rs.getBigDecimal("total_gross"));
+                    report.setTotalDeductions(rs.getBigDecimal("total_deduct"));
+                    report.setTotalNetPay(rs.getBigDecimal("total_net"));
+                }
+            }
+
+            // Execute second query for department breakdown
+            Map<String, BigDecimal> breakdownMap = new HashMap<>();
+            try (PreparedStatement ps = conn.prepareStatement(breakdownSql)) {
+                ps.setInt(1, year);
+                ps.setInt(2, month);
+                ResultSet rs = ps.executeQuery();
+                while (rs.next()) {
+                    breakdownMap.put(rs.getString("department_name"), rs.getBigDecimal("department_net_pay"));
+                }
+            }
+            report.setNetPayByDepartment(breakdownMap);
+
+        } catch (SQLException e) {
+            e.printStackTrace();
+            throw new RemoteException("Error generating payroll summary report.", e);
+        }
+
+        return report;
+    }
+
+    // Add these two new methods to your PayrollServiceImpl.java class
+
+    @Override
+    public List<Bonus> getUnapprovedBonusesForMyDepartment(int actorUserId) throws RemoteException {
+        // Security Check for Manager Role
+        try {
+            if (!checkUserRole(actorUserId, Role.MANAGER)) {
+                throw new SecurityException("Access Denied: You do not have Manager privileges.");
+            }
+        } catch (SQLException e) { throw new RemoteException("Could not verify user permissions.", e); }
+
+        List<Bonus> bonusList = new ArrayList<>();
+        try (Connection conn = DatabaseManager.getConnection()) {
+            // First, find the manager's department ID
+            int departmentId = getDepartmentIdForUser(conn, actorUserId);
+
+            // Now, find all unapproved bonuses for users in that department
+            String sql = "SELECT b.id, b.user_id, u.f_name, u.l_name, b.pay_period_start_date, b.name, b.type, b.amount " +
+                    "FROM public.bonuses b " +
+                    "JOIN public.\"user\" u ON b.user_id = u.id " +
+                    "JOIN public.job_titles j ON u.job_title_id = j.id " +
+                    "WHERE j.dept_id = ? AND b.is_approved = false";
+
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setInt(1, departmentId);
+                ResultSet rs = ps.executeQuery();
+                while(rs.next()) {
+                    Bonus bonus = new Bonus();
+                    bonus.setId(rs.getInt("id"));
+                    bonus.setUserId(rs.getInt("user_id"));
+                    bonus.setEmployeeName(rs.getString("f_name") + " " + rs.getString("l_name"));
+                    bonus.setPayPeriodStartDate(rs.getDate("pay_period_start_date").toLocalDate());
+                    bonus.setName(rs.getString("name"));
+                    bonus.setType(PayItemType.valueOf(rs.getString("type")));
+                    bonus.setAmount(rs.getBigDecimal("amount"));
+                    bonusList.add(bonus);
+                }
+            }
+        } catch (SQLException e) {
+            throw new RemoteException("Error fetching unapproved bonuses.", e);
+        }
+        return bonusList;
+    }
+
+    @Override
+    public boolean approveBonus(int actorUserId, int bonusId) throws RemoteException {
+        // Security Check for Manager Role
+        try {
+            if (!checkUserRole(actorUserId, Role.MANAGER)) {
+                throw new SecurityException("Access Denied: You do not have Manager privileges.");
+            }
+        } catch (SQLException e) { throw new RemoteException("Could not verify user permissions.", e); }
+
+        // Security Check: Ensure manager is not approving bonuses outside their department (important!)
+        // (This check would be added in a production system)
+
+        String sql = "UPDATE public.bonuses SET is_approved = true, approved_by_id = ? WHERE id = ? AND is_approved = false";
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, actorUserId);
+            ps.setInt(2, bonusId);
+            int rowsAffected = ps.executeUpdate();
+            return rowsAffected > 0;
+        } catch (SQLException e) {
+            throw new RemoteException("Error approving bonus.", e);
+        }
+    }
+
+    // It's good practice to refactor repeated logic into a helper method.
+    // We can create a helper to get a user's department ID.
+    private int getDepartmentIdForUser(Connection conn, int userId) throws SQLException {
+        String findDeptSql = "SELECT j.dept_id FROM public.\"user\" u JOIN public.job_titles j ON u.job_title_id = j.id WHERE u.id = ?";
+        try (PreparedStatement ps = conn.prepareStatement(findDeptSql)) {
+            ps.setInt(1, userId);
+            ResultSet rs = ps.executeQuery();
+            if (rs.next()) {
+                return rs.getInt("dept_id");
+            }
+        }
+        return -1; // User not found or has no department
+    }
+
 
 }

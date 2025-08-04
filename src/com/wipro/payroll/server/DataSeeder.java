@@ -175,25 +175,6 @@ public class DataSeeder {
         }
     }
 
-    private static void seedBonuses(Connection conn) throws SQLException {
-        System.out.println("Seeding sample bonuses...");
-        String sql = "INSERT INTO public.bonuses (user_id, pay_period_start_date, name, type, amount, is_approved, approved_by_id) " +
-                "VALUES (?, ?, ?, CAST(? AS pay_item_type_enum), ?, ?, ?)";
-        try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            // Example: emp1 (user 3) gets a performance bonus for July, approved by the manager (user 1)
-            ps.setInt(1, 3);
-            ps.setDate(2, java.sql.Date.valueOf("2025-07-01"));
-            ps.setString(3, "Q2 High Performance Bonus");
-            ps.setString(4, "EARNING");
-            ps.setBigDecimal(5, new BigDecimal("1000.00"));
-            ps.setBoolean(6, true);
-            ps.setInt(7, 1); // Approved by 'mng'
-            ps.addBatch();
-
-            ps.executeBatch();
-        }
-    }
-
     private static void seedAttendance(Connection conn) throws SQLException {
         System.out.println("Seeding monthly attendance summaries...");
         String sql = "INSERT INTO public.attendances (user_id, pay_period_start_date, days_worked, unpaid_leave_days, overtime_hours) VALUES (?, ?, ?, ?, ?)";
@@ -207,6 +188,23 @@ public class DataSeeder {
             ps.setBigDecimal(5, new BigDecimal("8.00"));
 
             ps.addBatch();
+            ps.executeBatch();
+        }
+    }
+
+    private static void seedBonuses(Connection conn) throws SQLException {
+        System.out.println("Seeding sample bonuses...");
+        String sql = "INSERT INTO public.bonuses (user_id, pay_period_start_date, name, type, amount, is_approved, approved_by_id) " +
+                "VALUES (?, ?, ?, CAST(? AS pay_item_type_enum), ?, ?, ?)";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            // An already approved bonus for emp1
+            ps.setInt(1, 3); ps.setDate(2, java.sql.Date.valueOf("2025-07-01")); ps.setString(3, "Q2 High Performance Bonus"); ps.setString(4, "EARNING"); ps.setBigDecimal(5, new BigDecimal("1000.00")); ps.setBoolean(6, true); ps.setInt(7, 1);
+            ps.addBatch();
+
+            // A NEW, UNAPPROVED bonus for emp2, waiting for the manager's approval
+            ps.setInt(1, 4); ps.setDate(2, java.sql.Date.valueOf("2025-08-01")); ps.setString(3, "On-call Support Allowance"); ps.setString(4, "EARNING"); ps.setBigDecimal(5, new BigDecimal("350.00")); ps.setBoolean(6, false); ps.setObject(7, null);
+            ps.addBatch();
+
             ps.executeBatch();
         }
     }

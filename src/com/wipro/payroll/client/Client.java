@@ -7,6 +7,7 @@ import java.rmi.RemoteException;
 import java.rmi.registry.LocateRegistry;
 import java.rmi.registry.Registry;
 import java.util.List;
+import java.util.Map;
 import java.util.Scanner;
 
 public class Client {
@@ -25,7 +26,6 @@ public class Client {
                 if (loggedInUser == null) {
                     showMainMenu();
                 } else {
-                    // If user is logged in, route them (handles returning from a sub-menu)
                     routeUserBasedOnRole();
                 }
             }
@@ -47,7 +47,7 @@ public class Client {
                 break;
             case "2":
                 System.out.println("Thank you for using the system. Exiting...");
-                System.exit(0); // Terminate the application
+                System.exit(0);
                 break;
             default:
                 System.out.println("Invalid option. Please try again.");
@@ -91,13 +91,12 @@ public class Client {
     }
 
 
-
-// =================================================================
+    // =================================================================
     //  ROLE-SPECIFIC MENUS
     // =================================================================
 
     private static void showEmployeeMenu(boolean isSwitchedView) {
-        while (loggedInUser != null && hasRole("EMPLOYEE")) {
+        while (loggedInUser != null && (hasRole("EMPLOYEE") || isSwitchedView)) {
             System.out.println("\n--- Employee Portal ---");
             System.out.println("1. View My Profile");
             System.out.println("2. View My Latest Payslip");
@@ -108,6 +107,7 @@ public class Client {
             } else {
                 System.out.println("9. Logout");
             }
+
             System.out.print("Choose an option: ");
             String choice = scanner.nextLine();
 
@@ -122,8 +122,12 @@ public class Client {
                     handleUpdateBankDetails();
                     break;
                 case "9":
-                    if (isSwitchedView) return; // Return to the calling menu (HR or Manager)
-                    else handleLogout();
+                    if (isSwitchedView) {
+                        System.out.println("Returning to previous menu...");
+                        return;
+                    } else {
+                        handleLogout();
+                    }
                     break;
                 default:
                     System.out.println("Invalid option.");
@@ -131,28 +135,39 @@ public class Client {
         }
     }
 
+
+    // =================================================================
+    //  HR Administrator Methods
+    // =================================================================
+
     private static void showHrMenu() {
         while (loggedInUser != null && hasRole("HR")) {
             System.out.println("\n--- HR Administrator Portal ---");
-            System.out.println("1. Create New Employee");
-            System.out.println("2. View All Employees");
-            System.out.println("3. Edit Employee Details");
-            System.out.println("4. Manage Compensation Rules");
-            System.out.println("5. Run Payroll Cycle");
-            System.out.println("6. View Employee Payslip");
-            System.out.println("7. List All Generated Payslips");
 
-            System.out.println("8. Switch to My Employee View");
-            System.out.println("9. Logout");
+            System.out.println("\n-- Employee Management --");
+            System.out.println("1. View All Employees");
+            System.out.println("2. Create New Employee");
+            System.out.println("3. Edit Employee Details");
+
+            System.out.println("\n-- Payroll & Compensation --");
+            System.out.println("4. Manage Pay Template");
+            System.out.println("5. Payroll Operations");
+            System.out.println("6. View Payroll History");
+            System.out.println("7. Generate Monthly Summary Report");
+            System.out.println("8. View Pending Approvals Report");
+
+            System.out.println("\n");
+            System.out.println("9. Switch to My Employee View");
+            System.out.println("0. Logout");
             System.out.print("Choose an option: ");
             String choice = scanner.nextLine();
 
             switch (choice) {
                 case "1":
-                    handleCreateUser();
+                    handleReadAllUsers();
                     break;
                 case "2":
-                    handleReadAllUsers();
+                    handleCreateUser();
                     break;
                 case "3":
                     handleEditUser();
@@ -161,19 +176,22 @@ public class Client {
                     handleManageCompensation();
                     break;
                 case "5":
-                    handleRunPayroll();
+                    handlePayrollOperations();
                     break;
                 case "6":
-                    handleViewEmployeePayslip();
+                    handleViewPayrollHistory();
                     break;
                 case "7":
-                    handleListAllPayslips();
+                    handleGenerateSummaryReport();
                     break;
                 case "8":
-                    System.out.println("Switching to Employee View...");
-                    showEmployeeMenu(true); // 'true' means it will show "Return to Previous Menu"
+                    handleViewPendingApprovals();
                     break;
                 case "9":
+                    System.out.println("Switching to Employee View...");
+                    showEmployeeMenu(true);
+                    break;
+                case "0":
                     handleLogout();
                     break;
                 default:
@@ -181,6 +199,96 @@ public class Client {
             }
         }
     }
+
+    private static void handlePayrollOperations() {
+        try {
+            List<Bonus> pendingBonuses = payrollService.getAllPendingBonuses(loggedInUser.getId());
+
+            if (!pendingBonuses.isEmpty()) {
+                String redColor = "\u001B[31m";
+                String resetColor = "\u001B[0m";
+
+                System.out.println("\n" + redColor + "================== WARNING ==================" + resetColor);
+                System.out.printf(redColor + "There are %d bonus approvals still pending." + resetColor + "\n", pendingBonuses.size());
+                System.out.println(redColor + "Running payroll now may result in underpayment for some employees." + resetColor);
+                System.out.println("==========================================");
+                System.out.print("Are you absolutely sure you want to proceed? (yes/no): ");
+
+                if (!scanner.nextLine().equalsIgnoreCase("yes")) {
+                    System.out.println("Payroll operation cancelled. Please clear pending approvals first.");
+                    return; // Exit the function to prevent the payroll run
+                }
+            }
+
+            // STEP 3: If there are no pending items, or if the user overrode the warning, proceed.
+            System.out.println("\n--- Payroll Operations ---");
+            System.out.println("1. Run Full Payroll Cycle for ALL Employees");
+            System.out.println("2. Run Payroll for a SINGLE Employee");
+            System.out.println("9. Return");
+            System.out.print("Choose an option: ");
+            String choice = scanner.nextLine();
+
+            if (choice.equals("1")) {
+                runPayrollFor(0); // Use 0 to signify "ALL"
+            } else if (choice.equals("2")) {
+                System.out.print("Enter the User ID of the employee to process: ");
+                int targetUserId = Integer.parseInt(scanner.nextLine());
+                runPayrollFor(targetUserId);
+            }
+
+        } catch (NumberFormatException e) {
+            System.err.println("❌ Invalid ID. Please enter a number.");
+        } catch (RemoteException e) {
+            System.err.println("❌ Error checking for pending approvals: " + e.getMessage());
+        }
+    }
+
+    private static void handleViewPayrollHistory() {
+        // This method first calls the list handler...
+        handleListAllPayslips();
+
+        // ...then asks the user if they want to see details.
+        System.out.print("\nWould you like to view the full details for a specific payslip? (y/n): ");
+        String choice = scanner.nextLine();
+
+        if (choice.equalsIgnoreCase("y")) {
+            // If yes, it calls the detailed view handler.
+            handleViewEmployeePayslip();
+        }
+    }
+
+    private static void handleViewPendingApprovals() {
+        try {
+            System.out.println("\n--- Report: All Pending Bonus Approvals ---");
+            List<Bonus> pendingBonuses = payrollService.getAllPendingBonuses(loggedInUser.getId());
+
+            if (pendingBonuses.isEmpty()) {
+                System.out.println("✅ Great! There are no pending bonus approvals in the system.");
+                return;
+            }
+
+            System.out.println("WARNING: The following items must be approved by their managers before payroll is run:");
+            System.out.println("------------------------------------------------------------------------------------------");
+            System.out.printf("| %-8s | %-12s | %-20s | %-30s |%n", "Bonus ID", "Pay Period", "Employee Name", "Description");
+            System.out.println("------------------------------------------------------------------------------------------");
+            for (Bonus bonus : pendingBonuses) {
+                System.out.printf("| %-8d | %-12s | %-20s | %-30s |%n",
+                        bonus.getId(),
+                        bonus.getPayPeriodStartDate().toString().substring(0, 7),
+                        bonus.getEmployeeName(),
+                        bonus.getName());
+            }
+            System.out.println("------------------------------------------------------------------------------------------");
+
+        } catch (RemoteException e) {
+            System.err.println("❌ An error occurred: " + e.getMessage());
+        }
+    }
+
+
+    // =================================================================
+    //  MANAGER Administrator Methods
+    // =================================================================
 
     private static void showManagerMenu() {
         while (loggedInUser != null && hasRole("MANAGER")) {
@@ -194,8 +302,10 @@ public class Client {
 
             switch (choice) {
                 case "1":
+                    handleViewDepartmentReport();
+                    break;
                 case "2":
-                    System.out.println("[Feature Not Implemented Yet]");
+                    handleApproveBonuses(); // UNCOMMENT
                     break;
                 case "8":
                     System.out.println("Switching to Employee View...");
@@ -210,6 +320,88 @@ public class Client {
         }
     }
 
+    private static void handleViewDepartmentReport() {
+        try {
+            System.out.println("\nFetching your department report...");
+            List<User> employees = payrollService.getMyDepartmentEmployees(loggedInUser.getId());
+
+            if (employees.isEmpty()) {
+                System.out.println("No employees found in your department.");
+                return;
+            }
+
+            System.out.println("\n--- Report for Your Department ---");
+            System.out.println("--------------------------------------------------------------------------");
+            System.out.printf("| %-4s | %-15s | %-20s | %-25s |%n", "ID", "Username", "Full Name", "Job Title");
+            System.out.println("--------------------------------------------------------------------------");
+
+            for (User user : employees) {
+                System.out.printf("| %-4d | %-15s | %-20s | %-25s |%n",
+                        user.getId(),
+                        user.getUsername(),
+                        user.getFName() + " " + user.getLName(),
+                        user.getJobTitle());
+            }
+            System.out.println("--------------------------------------------------------------------------");
+            System.out.println(employees.size() + " employee(s) in your department.");
+
+        } catch (RemoteException e) {
+            System.err.println("❌ An error occurred while fetching your report: " + e.getMessage());
+        }
+    }
+
+    private static void handleApproveBonuses() {
+        try {
+            System.out.println("\n--- Approve Pending Bonuses ---");
+
+            // 1. Fetch the list of unapproved bonuses
+            List<Bonus> pendingBonuses = payrollService.getUnapprovedBonusesForMyDepartment(loggedInUser.getId());
+
+            if (pendingBonuses.isEmpty()) {
+                System.out.println("There are no pending bonuses in your department to approve.");
+                return;
+            }
+
+            // 2. Display the list in a table
+            System.out.println("The following bonuses are pending your approval:");
+            System.out.println("--------------------------------------------------------------------------------------");
+            System.out.printf("| %-8s | %-20s | %-30s | %15s |%n", "Bonus ID", "Employee Name", "Description", "Amount (RM)");
+            System.out.println("--------------------------------------------------------------------------------------");
+            for (Bonus bonus : pendingBonuses) {
+                System.out.printf("| %-8d | %-20s | %-30s | %15.2f |%n",
+                        bonus.getId(),
+                        bonus.getEmployeeName(),
+                        bonus.getName(),
+                        bonus.getAmount());
+            }
+            System.out.println("--------------------------------------------------------------------------------------");
+
+            // 3. Prompt the manager for action
+            System.out.print("Enter the Bonus ID to approve (or press Enter to cancel): ");
+            String input = scanner.nextLine();
+
+            if (input.isBlank()) {
+                System.out.println("Approval process cancelled.");
+                return;
+            }
+
+            int bonusIdToApprove = Integer.parseInt(input);
+
+            // 4. Call the approval method on the server
+            boolean success = payrollService.approveBonus(loggedInUser.getId(), bonusIdToApprove);
+
+            if (success) {
+                System.out.println("✅ Bonus ID " + bonusIdToApprove + " has been successfully approved.");
+            } else {
+                System.out.println("❌ Failed to approve bonus. The ID may be incorrect or it was already approved.");
+            }
+
+        } catch (NumberFormatException e) {
+            System.err.println("❌ Invalid ID. Please enter a number.");
+        } catch (RemoteException e) {
+            System.err.println("❌ An error occurred: " + e.getMessage());
+        }
+    }
 
     // =================================================================
     //  FEATURE HANDLERS & HELPERS
@@ -694,6 +886,69 @@ public class Client {
 
         } catch (RemoteException e) {
             System.err.println("❌ An error occurred: " + e.getMessage());
+        }
+    }
+
+    private static void runPayrollFor(int targetUserId) {
+        try {
+            // This logic is from our old handleRunPayroll method
+            System.out.print("Enter the Year for the payroll run (e.g., 2025): ");
+            int year = Integer.parseInt(scanner.nextLine());
+            System.out.print("Enter the Month for the payroll run (1-12): ");
+            int month = Integer.parseInt(scanner.nextLine());
+
+            System.out.print("Type 'YES' to confirm: ");
+            if (scanner.nextLine().equals("YES")) {
+                System.out.println("Processing...");
+                // We need a new RMI method that can accept a targetUserId
+                String result = payrollService.runMonthlyPayrollForTarget(loggedInUser.getId(), year, month, targetUserId);
+                System.out.println("\n✅ Server Response: " + result);
+            } else {
+                System.out.println("Payroll run cancelled.");
+            }
+        } catch (Exception e) {
+            System.err.println("❌ An error occurred: " + e.getMessage());
+        }
+    }
+
+    private static void handleGenerateSummaryReport() {
+        try {
+            System.out.println("\n--- Monthly Payroll Summary Report ---");
+            System.out.print("Enter the Year for the report (e.g., 2025): ");
+            int year = Integer.parseInt(scanner.nextLine());
+            System.out.print("Enter the Month for the report (1-12): ");
+            int month = Integer.parseInt(scanner.nextLine());
+
+            System.out.println("\nGenerating report... please wait.");
+            PayrollSummaryReport report = payrollService.getPayrollSummaryReport(loggedInUser.getId(), year, month);
+
+            if (report == null || report.getNumberOfEmployeesPaid() == 0) {
+                System.out.println("No payroll data found for the specified period.");
+                return;
+            }
+
+            System.out.println("\n=======================================================");
+            System.out.printf("      Payroll Summary Report for %d-%02d\n", year, month);
+            System.out.println("=======================================================");
+            System.out.printf(" Employees Paid      : %d\n", report.getNumberOfEmployeesPaid());
+            System.out.printf(" Total Gross Earnings: RM %,.2f\n", report.getTotalGrossEarnings());
+            System.out.printf(" Total Deductions    : RM %,.2f\n", report.getTotalDeductions());
+            System.out.printf(" Total Net Pay       : RM %,.2f\n", report.getTotalNetPay());
+            System.out.println("-------------------------------------------------------");
+            System.out.println(" Net Pay by Department:");
+            if (report.getNetPayByDepartment().isEmpty()) {
+                System.out.println("  No department breakdown available.");
+            } else {
+                for (Map.Entry<String, BigDecimal> entry : report.getNetPayByDepartment().entrySet()) {
+                    System.out.printf("  - %-20s: RM %,.2f\n", entry.getKey(), entry.getValue());
+                }
+            }
+            System.out.println("=======================================================");
+
+        } catch (NumberFormatException e) {
+            System.err.println("❌ Invalid year or month. Please enter numbers only.");
+        } catch (RemoteException e) {
+            System.err.println("❌ An error occurred while generating the report: " + e.getMessage());
         }
     }
 
