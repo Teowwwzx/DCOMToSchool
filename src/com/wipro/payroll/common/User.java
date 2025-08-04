@@ -8,7 +8,6 @@ import java.util.List;
 public class User implements Serializable {
     private static final long serialVersionUID = 1L;
 
-    // --- Fields matching the database and server logic ---
     private int id;
     private int deptId;
     private String departmentName;
@@ -24,10 +23,8 @@ public class User implements Serializable {
     private UserStatus status;
     private Role role;
 
-    // No-argument constructor
     public User() {}
 
-    // --- Getters and Setters (using standard camelCase) ---
     public int getId() { return id; }
     public void setId(int id) { this.id = id; }
     public int getDeptId() { return deptId; }

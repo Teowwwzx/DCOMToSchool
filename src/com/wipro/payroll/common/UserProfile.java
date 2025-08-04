@@ -3,31 +3,23 @@ package com.wipro.payroll.common;
 import java.io.Serializable;
 import java.util.List;
 
-/**
- * A Data Transfer Object (DTO) that holds all the aggregated information
- * for a user's profile screen. This allows us to fetch everything in one RMI call.
- */
+
 public class UserProfile implements Serializable {
     private static final long serialVersionUID = 1L;
 
-    // Basic user info
     private String firstName;
     private String lastName;
     private String username;
     private String email;
     private String phone;
-
-    // Joined info
     private String departmentName;
     private String jobTitle;
     private String employmentType;
-
-    // Related objects
     private UserBankDetails bankDetails;
-    private List<Payslip> payslipHistory; // Assuming Payslip.java exists
+    private List<Payslip> payslipHistory;
+
 
     // --- Getters and Setters for all fields ---
-
     public String getFirstName() { return firstName; }
     public void setFirstName(String firstName) { this.firstName = firstName; }
     public String getLastName() { return lastName; }

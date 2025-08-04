@@ -6,6 +6,10 @@ import java.rmi.registry.Registry;
 public class Server {
     public static void main(String[] args) {
         try {
+//            C3011 - 192.168.100.5
+//            Mobile Hostpot -
+            System.setProperty("java.rmi.server.hostname", "192.168.100.5");
+
             // 1. Create an instance of our implementation
             PayrollServiceImpl payrollService = new PayrollServiceImpl();
 
@@ -16,7 +20,7 @@ public class Server {
             registry.bind("PayrollService", payrollService);
 
             System.out.println("✅ Payroll RMI Server is running and ready.");
-            System.out.println("   Listening on port 1099...");
+            System.out.println("   Listening on IP " + System.getProperty("java.rmi.server.hostname") + " on port 1099...");
 
             System.out.println("\n[Server is active. Press the red 'Stop' button in IntelliJ to shut down]");
 

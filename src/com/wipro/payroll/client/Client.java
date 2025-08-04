@@ -18,7 +18,10 @@ public class Client {
 
     public static void main(String[] args) {
         try {
-            Registry registry = LocateRegistry.getRegistry("localhost", 1099);
+            String serverAddress = "192.168.100.5";
+
+            Registry registry = LocateRegistry.getRegistry("serverAddress", 1099);
+//            Registry registry = LocateRegistry.getRegistry("localhost", 1099);
             payrollService = (PayrollService) registry.lookup("PayrollService");
             System.out.println("✅ Successfully connected to the Payroll RMI Service.");
 
