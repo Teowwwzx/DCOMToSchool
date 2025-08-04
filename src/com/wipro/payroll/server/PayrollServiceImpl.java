@@ -1,469 +1,850 @@
 package com.wipro.payroll.server;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.math.RoundingMode;
 import java.rmi.RemoteException;
 import java.rmi.server.UnicastRemoteObject;
+import java.security.MessageDigest;
 import java.sql.*;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import com.wipro.payroll.common.*;
 import org.mindrot.jbcrypt.BCrypt;
 
 public class PayrollServiceImpl extends UnicastRemoteObject implements PayrollService {
 
-    private Connection dbConnection;
-
     public PayrollServiceImpl() throws RemoteException {
         super();
-        try {
-            String dbUrl = "jdbc:postgresql://ep-withered-flower-a811hc2n-pooler.eastus2.azure.neon.tech:5432/neondb?sslmode=require&channel_binding=require";
-            String dbUser = "neondb_owner";
-            String dbPassword = "npg_4A1VduWMcaYT";
-            dbConnection = DriverManager.getConnection(dbUrl, dbUser, dbPassword);
-            System.out.println("✅ Successfully connected to the PostgreSQL database.");
-        } catch (SQLException e) {
-            System.err.println("Database connection failed: " + e.getMessage());
-            throw new RemoteException("Server could not connect to the database.", e);
-        }
+        System.out.println("✅ PayrollServiceImpl instance created and ready.");
     }
 
+    // --- AUTHENTICATION ---
     @Override
     public User login(String username, String password) throws RemoteException {
-        System.out.println("[SERVER] Login attempt for username: " + username);
-        String sql = "SELECT u.*, jt.dept_id FROM \"user\" u " +
-                "LEFT JOIN \"job_titles\" jt ON u.job_title_id = jt.id " +
-                "WHERE u.username = ? AND u.status = 'ACTIVE'";
+        User user = null;
 
-        try (PreparedStatement stmt = dbConnection.prepareStatement(sql)) {
-            stmt.setString(1, username);
-            ResultSet rs = stmt.executeQuery();
+        String sql = "SELECT id, username, f_name, l_name, email, phone, ic, status, role " +
+                "FROM public.user WHERE username = ? AND pwd_hash = ?";
+
+        try (Connection conn = DatabaseManager.getConnection(); // Assumes you have a DatabaseManager
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+
+            ps.setString(1, username);
+            ps.setString(2, hashPassword(password)); // Hash the provided password for comparison
+
+            ResultSet rs = ps.executeQuery();
 
             if (rs.next()) {
-                String storedHash = rs.getString("pwd_hash");
-                String status = rs.getString("status");
+                user = new User();
+                user.setId(rs.getInt("id"));
+                user.setUsername(rs.getString("username"));
+                user.setFName(rs.getString("f_name"));
+                user.setLName(rs.getString("l_name"));
+                user.setEmail(rs.getString("email"));
+                user.setPhone(rs.getString("phone"));
+                user.setIc(rs.getString("ic"));
 
-                if (!status.equals("ACTIVE")) {
-                    System.out.println("[SERVER] Login failed: User '" + username + "' found, but their account status is '" + status + "'.");
-                    return null; // For security, send a generic message to the client
+                // Convert the String from DB to a Role enum
+                String roleStr = rs.getString("role");
+                if (roleStr != null) {
+                    user.setRole(Role.valueOf(roleStr.toUpperCase()));
                 }
 
-                if (BCrypt.checkpw(password, storedHash)) {
-                    int userId = rs.getInt("id");
-                    System.out.println("[SERVER] Login successful for user ID: " + userId);
-                    return buildUserFromResultSet(rs); // Use a helper to build the full User object
-                } else {
-                    // PASSWORD IS WRONG!
-                    System.out.println("[SERVER] Login failed: User '" + username + "' found, but the password was incorrect.");
-                    return null;
-                }
+                // You can also fetch and set the status if needed
+                // String statusStr = rs.getString("status");
+                // user.setStatus(UserStatus.valueOf(statusStr.toUpperCase()));
+
+                // Update last_login timestamp (optional but good practice)
+                // UPDATE public.user SET last_login = NOW() WHERE id = ?
             }
+
         } catch (SQLException e) {
+            System.err.println("Database error during login for user: " + username);
             e.printStackTrace();
-            throw new RemoteException("Database error during login for user: " + username, e);
+            // It's good practice to wrap the SQLException in a RemoteException for the client
+            throw new RemoteException("Server database error, please try again later.", e);
+        } catch (Exception e) {
+            // Catch hashing errors
+            e.printStackTrace();
+            throw new RemoteException("Server security error.", e);
         }
 
-        System.out.println("[SERVER] Login failed for username: " + username + password);
-        return null; // Return null if user not found or password incorrect
+        return user; // Returns the full User object on success, or null on failure
+    }
+
+    private String hashPassword(String password) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] hash = md.digest(password.getBytes());
+            BigInteger number = new BigInteger(1, hash);
+            StringBuilder hexString = new StringBuilder(number.toString(16));
+            while (hexString.length() < 64) {
+                hexString.insert(0, '0');
+            }
+            return hexString.toString();
+        } catch (Exception e) {
+            throw new RuntimeException("Error hashing password", e);
+        }
     }
 
     @Override
-    public String registerUser(User newUser, String password) throws RemoteException {
-        System.out.println("[SERVER] Registration attempt for username: " + newUser.getUsername());
-        // Using a transaction to ensure both user and user_role are created, or neither.
-        try {
-            dbConnection.setAutoCommit(false); // Start transaction
+    public UserProfile getMyProfile(int userId) throws RemoteException {
+        UserProfile userProfile = new UserProfile();
 
-            // 1. Insert into the "user" table
-            String userSql = "INSERT INTO \"user\" (dept_id, username, f_name, l_name, email, ic, pwd_hash, status, phone_number) " +
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?)";
+        // Query 1: Get User, Department, Job Title, and Emp Type in one go using JOINs
+        String profileSql = "SELECT u.f_name, u.l_name, u.username, u.email, u.phone, " +
+                "d.name AS department_name, j.title AS job_title, j.level AS job_level, et.name AS emp_type_name " +
+                "FROM public.\"user\" u " +
+                "LEFT JOIN public.job_titles j ON u.job_title_id = j.id " +
+                "LEFT JOIN public.departments d ON j.dept_id = d.id " +
+                "LEFT JOIN public.emp_types et ON u.emp_type_id = et.id " +
+                "WHERE u.id = ?";
 
-            // Get the generated user ID back
-            PreparedStatement userStmt = dbConnection.prepareStatement(userSql, Statement.RETURN_GENERATED_KEYS);
-            userStmt.setInt(1, newUser.getDepartmentId());
-            userStmt.setString(2, newUser.getUsername());
-            userStmt.setString(3, newUser.getFirstName());
-            userStmt.setString(4, newUser.getLastName());
-            userStmt.setString(5, newUser.getEmail());
-            userStmt.setString(6, newUser.getIc());
-            userStmt.setString(7, BCrypt.hashpw(password, BCrypt.gensalt(12)));
-            userStmt.setString(8, newUser.getPhoneNumber());
-            userStmt.executeUpdate();
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement psProfile = conn.prepareStatement(profileSql)) {
 
-            // Get the new user's generated ID
-            ResultSet generatedKeys = userStmt.getGeneratedKeys();
-            if (!generatedKeys.next()) {
-                dbConnection.rollback();
-                return "Error: Could not create user.";
+            psProfile.setInt(1, userId);
+            ResultSet rs = psProfile.executeQuery();
+
+            if (rs.next()) {
+                userProfile.setFirstName(rs.getString("f_name"));
+                userProfile.setLastName(rs.getString("l_name"));
+                userProfile.setUsername(rs.getString("username"));
+                userProfile.setEmail(rs.getString("email"));
+                userProfile.setPhone(rs.getString("phone"));
+                userProfile.setDepartmentName(rs.getString("department_name"));
+                userProfile.setJobTitle(rs.getString("job_title") + " (" + rs.getString("job_level") + ")");
+                userProfile.setEmploymentType(rs.getString("emp_type_name"));
+            } else {
+                // User not found, return an empty profile or throw an exception
+                return null;
             }
-            int newUserId = generatedKeys.getInt(1);
 
-            // 2. Assign the default 'EMPLOYEE' role (assuming role_id=1)
-            String roleSql = "INSERT INTO \"user_role\" (user_id, role_id) VALUES (?, ?)";
-            PreparedStatement roleStmt = dbConnection.prepareStatement(roleSql);
-            roleStmt.setInt(1, newUserId);
-            roleStmt.setInt(2, 1); // Role ID 1 = EMPLOYEE
-            roleStmt.executeUpdate();
+            // Query 2: Get Bank Details (using your existing method logic)
+            userProfile.setBankDetails(this.getMyBankDetails(userId));
 
-            dbConnection.commit(); // Finalize transaction
-            System.out.println("[SERVER] User registered successfully with ID: " + newUserId);
-            return "Registration successful for " + newUser.getUsername();
+            // Query 3: Get Payslip History (you'll need a method for this)
+            // For now, let's assume getMyPayslipHistory(userId) exists and fetches the list
+            // userProfile.setPayslipHistory(this.getMyPayslipHistory(userId));
+            // We can implement getMyPayslipHistory later. Let's leave it null for now.
 
         } catch (SQLException e) {
-            try { dbConnection.rollback(); } catch (SQLException ex) { ex.printStackTrace(); }
             e.printStackTrace();
-            throw new RemoteException("Database error during registration.", e);
-        } finally {
-            try { dbConnection.setAutoCommit(true); } catch (SQLException ex) { ex.printStackTrace(); }
+            throw new RemoteException("Server database error while fetching profile.", e);
         }
-    }
 
+        return userProfile;
+    }
 
     @Override
     public Payslip getMyLatestPayslip(int userId) throws RemoteException {
-        System.out.println("[SERVER] Fetching latest payslip for user ID: " + userId);
         Payslip payslip = null;
-        String payslipSql = "SELECT * FROM \"payslip\" WHERE user_id = ? ORDER BY pay_period_end_date DESC LIMIT 1";
+        // First, find the ID of the most recent payslip for the user
+        String latestPayslipIdSql = "SELECT id FROM payslip WHERE user_id = ? ORDER BY pay_period_end_date DESC LIMIT 1";
+        int payslipId = -1;
 
-        try (PreparedStatement stmt = dbConnection.prepareStatement(payslipSql)) {
-            stmt.setInt(1, userId);
-            ResultSet rs = stmt.executeQuery();
-
-            if (rs.next()) {
-                payslip = new Payslip();
-                payslip.setId(rs.getInt("id"));
-                payslip.setUserId(rs.getInt("user_id"));
-                payslip.setPayPeriodStartDate(rs.getDate("pay_period_start_date").toLocalDate());
-                payslip.setPayPeriodEndDate(rs.getDate("pay_period_end_date").toLocalDate());
-                payslip.setRemark(rs.getString("remark"));
-
-                // Now fetch the associated pay items
-                List<PayItem> items = getPayItemsForPayslip(payslip.getId());
-                payslip.setPayItems(items);
-
-                // Calculate totals on the fly
-                calculatePayslipTotals(payslip);
+        try (Connection conn = DatabaseManager.getConnection()) {
+            try (PreparedStatement ps = conn.prepareStatement(latestPayslipIdSql)) {
+                ps.setInt(1, userId);
+                ResultSet rs = ps.executeQuery();
+                if (rs.next()) {
+                    payslipId = rs.getInt("id");
+                } else {
+                    return null; // No payslips found for this user
+                }
             }
+
+            // Now, fetch the full payslip and its items
+            String payslipSql = "SELECT * FROM payslip WHERE id = ?";
+            String itemsSql = "SELECT name, type, amount FROM pay_items WHERE payslip_id = ?";
+
+            payslip = new Payslip();
+            payslip.setId(payslipId);
+
+            try (PreparedStatement psPayslip = conn.prepareStatement(payslipSql)) {
+                psPayslip.setInt(1, payslipId);
+                ResultSet rsPayslip = psPayslip.executeQuery();
+                if(rsPayslip.next()) {
+                    payslip.setPayPeriodStartDate(rsPayslip.getDate("pay_period_start_date").toLocalDate());
+                    payslip.setPayPeriodEndDate(rsPayslip.getDate("pay_period_end_date").toLocalDate());
+                }
+            }
+
+            BigDecimal gross = BigDecimal.ZERO;
+            BigDecimal deductions = BigDecimal.ZERO;
+            try (PreparedStatement psItems = conn.prepareStatement(itemsSql)) {
+                psItems.setInt(1, payslipId);
+                ResultSet rsItems = psItems.executeQuery();
+                while (rsItems.next()) {
+                    PayItem item = new PayItem();
+                    item.setName(rsItems.getString("name"));
+                    item.setAmount(rsItems.getBigDecimal("amount"));
+                    PayItemType type = PayItemType.valueOf(rsItems.getString("type"));
+                    item.setType(type);
+                    payslip.getPayItems().add(item);
+
+                    if (type == PayItemType.EARNING) {
+                        gross = gross.add(item.getAmount());
+                    } else {
+                        deductions = deductions.add(item.getAmount());
+                    }
+                }
+            }
+            payslip.setGrossEarnings(gross);
+            payslip.setTotalDeductions(deductions);
+            payslip.setNetPay(gross.subtract(deductions));
+
         } catch (SQLException e) {
             e.printStackTrace();
-            throw new RemoteException("Could not fetch latest payslip for user " + userId, e);
+            throw new RemoteException("Error fetching latest payslip", e);
         }
         return payslip;
     }
 
-
     @Override
     public UserBankDetails getMyBankDetails(int userId) throws RemoteException {
-        String sql = "SELECT * FROM \"user_bank_details\" WHERE user_id = ?";
-        try (PreparedStatement stmt = dbConnection.prepareStatement(sql)) {
-            stmt.setInt(1, userId);
-            ResultSet rs = stmt.executeQuery();
-            if (rs.next()) {
-                UserBankDetails details = new UserBankDetails();
+        UserBankDetails details = null;
+        String sql = "SELECT user_id, bank_name, acc_no, acc_name FROM user_bank_details WHERE user_id = ?";
+        try(Connection conn = DatabaseManager.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, userId);
+            ResultSet rs = ps.executeQuery();
+            if(rs.next()) {
+                details = new UserBankDetails();
                 details.setUserId(rs.getInt("user_id"));
                 details.setBankName(rs.getString("bank_name"));
                 details.setAccountNumber(rs.getString("acc_no"));
                 details.setAccountHolderName(rs.getString("acc_name"));
-                return details;
             }
         } catch (SQLException e) {
             e.printStackTrace();
-            throw new RemoteException("Error fetching bank details for user " + userId, e);
+            throw new RemoteException("Error fetching bank details", e);
         }
-        return null; // Return null if no details are found
+        return details;
     }
-
 
     @Override
     public boolean updateMyBankDetails(int userId, UserBankDetails details) throws RemoteException {
-        System.out.println("[SERVER] Attempting to update bank details for user ID: " + userId);
-
-        // This SQL command is an "UPSERT". It attempts to INSERT a new row.
-        // If a row with the same user_id already exists (ON CONFLICT), it performs an UPDATE instead.
-        // This is a robust way to handle both creating and updating details.
-        String sql = "INSERT INTO \"user_bank_details\" (user_id, bank_name, acc_no, acc_name) " +
-                "VALUES (?, ?, ?, ?) " +
+        String sql = "INSERT INTO user_bank_details (user_id, bank_name, acc_no, acc_name) VALUES (?, ?, ?, ?) " +
                 "ON CONFLICT (user_id) DO UPDATE SET " +
-                "bank_name = EXCLUDED.bank_name, " +
-                "acc_no = EXCLUDED.acc_no, " +
-                "acc_name = EXCLUDED.acc_name";
-
-        try (PreparedStatement stmt = dbConnection.prepareStatement(sql)) {
-            stmt.setInt(1, userId);
-            stmt.setString(2, details.getBankName());
-            stmt.setString(3, details.getAccountNumber());
-            stmt.setString(4, details.getAccountHolderName());
-
-            int rowsAffected = stmt.executeUpdate();
-            return rowsAffected > 0; // Returns true if the insert or update was successful
-
+                "bank_name = EXCLUDED.bank_name, acc_no = EXCLUDED.acc_no, acc_name = EXCLUDED.acc_name";
+        try(Connection conn = DatabaseManager.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, userId);
+            ps.setString(2, details.getBankName());
+            ps.setString(3, details.getAccountNumber());
+            ps.setString(4, details.getAccountHolderName());
+            int rowsAffected = ps.executeUpdate();
+            return rowsAffected > 0;
         } catch (SQLException e) {
             e.printStackTrace();
-            throw new RemoteException("Database error while updating bank details for user " + userId, e);
+            throw new RemoteException("Error updating bank details", e);
         }
     }
 
-
+    // --- HR METHODS ---
     @Override
-    public String runMonthlyPayroll(int adminUserId) throws RemoteException {
-        System.out.println("[SERVER] Payroll run initiated by admin ID: " + adminUserId);
-
-        // --- Security Check ---
-        // In a real system, you'd verify the token. Here, we'll check the role.
-        if (!isUserInRole(adminUserId, "HR")) {
-            throw new SecurityException("User does not have permission to run payroll.");
-        }
-
-        // For simplicity, we'll run for the previous month
-        LocalDate today = LocalDate.now();
-        LocalDate startOfMonth = today.minusMonths(1).withDayOfMonth(1);
-        LocalDate endOfMonth = today.withDayOfMonth(1).minusDays(1);
-
-        List<User> activeUsers = getAllUsers(adminUserId); // Reuse existing method
-        int successCount = 0;
-
-        for (User user : activeUsers) {
-            try {
-                dbConnection.setAutoCommit(false); // Transaction per user
-
-                // 1. Create the payslip header
-                String payslipSql = "INSERT INTO \"payslip\" (user_id, pay_period_start_date, pay_period_end_date, remark) VALUES (?, ?, ?, ?)";
-                PreparedStatement payslipStmt = dbConnection.prepareStatement(payslipSql, Statement.RETURN_GENERATED_KEYS);
-                payslipStmt.setInt(1, user.getId());
-                payslipStmt.setDate(2, Date.valueOf(startOfMonth));
-                payslipStmt.setDate(3, Date.valueOf(endOfMonth));
-                payslipStmt.setString(4, "Payroll for " + startOfMonth.getMonth().toString());
-                payslipStmt.executeUpdate();
-
-                ResultSet generatedKeys = payslipStmt.getGeneratedKeys();
-                if (!generatedKeys.next()) {
-                    throw new SQLException("Failed to create payslip for user " + user.getId());
-                }
-                int payslipId = generatedKeys.getInt(1);
-
-                // 2. Define business rules & add pay items
-                // This is where your predefined formulas go!
-                BigDecimal baseSalary = new BigDecimal("5000.00"); // Example fixed salary
-
-                insertPayItem(payslipId, "Base Salary", PayItemType.EARNING, baseSalary);
-
-                // Rule: EPF is 11% of base salary
-                BigDecimal epf = baseSalary.multiply(new BigDecimal("0.11"));
-                insertPayItem(payslipId, "EPF Contribution", PayItemType.DEDUCTION, epf);
-
-                // Rule: SOCSO is a fixed small amount
-                BigDecimal socso = new BigDecimal("24.75");
-                insertPayItem(payslipId, "SOCSO Contribution", PayItemType.DEDUCTION, socso);
-
-                dbConnection.commit();
-                successCount++;
-
-            } catch (SQLException e) {
-                try { dbConnection.rollback(); } catch (SQLException ex) { ex.printStackTrace(); }
-                System.err.println("Failed to process payroll for user ID: " + user.getId());
-                e.printStackTrace();
-            } finally {
-                try { dbConnection.setAutoCommit(true); } catch (SQLException ex) { ex.printStackTrace(); }
+    public String createUser(int actorUserId, User newUser, String password) throws RemoteException {
+        // Step 1: Security Check - Ensure the person creating the user has the HR role.
+        try {
+            if (!checkUserRole(actorUserId, Role.HR)) {
+                throw new SecurityException("Access Denied: User with ID " + actorUserId + " does not have HR privileges.");
             }
+        } catch (SQLException e) {
+            throw new RemoteException("Could not verify user permissions.", e);
         }
-        return String.format("Payroll run complete. Successfully processed %d out of %d users.", successCount, activeUsers.size());
+
+        // Step 2: Prepare the data for insertion
+        String hashedPassword = hashPassword(password); // Reuse our SHA-256 hashing method
+
+        String sql = "INSERT INTO public.\"user\" (job_title_id, emp_type_id, username, f_name, l_name, email, phone, ic, pwd_hash, status, role) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', 'EMPLOYEE')"; // New users default to EMPLOYEE role
+
+        // =========================================================================
+        //  DEBUGGING: Print all values just before executing the database query
+        // =========================================================================
+        System.out.println("\n--- DEBUG: Attempting to create user with the following data ---");
+        System.out.println("Actor (HR) User ID: " + actorUserId);
+        System.out.println("Job Title ID: " + newUser.getJobTitleId());
+        System.out.println("Emp Type ID: " + newUser.getEmpTypeId());
+        System.out.println("Username: '" + newUser.getUsername() + "'");
+        System.out.println("First Name: '" + newUser.getFName() + "'");
+        System.out.println("Last Name: '" + newUser.getLName() + "'");
+        System.out.println("Email: '" + newUser.getEmail() + "'");
+        System.out.println("Phone: '" + newUser.getPhone() + "'");
+        System.out.println("IC: '" + newUser.getIc() + "'");
+        System.out.println("Hashed Password: '" + hashedPassword + "'");
+        System.out.println("----------------------------------------------------------------");
+
+        // Step 3: Execute the database insert
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+
+            ps.setInt(1, newUser.getJobTitleId());
+            ps.setInt(2, newUser.getEmpTypeId());
+            ps.setString(3, newUser.getUsername());
+            ps.setString(4, newUser.getFName());
+            ps.setString(5, newUser.getLName());
+            ps.setString(6, newUser.getEmail());
+            ps.setString(7, newUser.getPhone());
+            ps.setString(8, newUser.getIc());
+            ps.setString(9, hashedPassword);
+
+            System.out.println("Executing INSERT statement...");
+            int rowsAffected = ps.executeUpdate();
+            System.out.println(rowsAffected + " row(s) affected.");
+
+            if (rowsAffected > 0) {
+                return "Successfully created new employee: " + newUser.getUsername();
+            } else {
+                return "Failed to create new employee.";
+            }
+
+        } catch (SQLException e) {
+            // Handle specific errors, like a duplicate username
+            System.err.println("\n--- DEBUG: SQLException caught! ---");
+            System.err.println("SQLState: " + e.getSQLState());
+            System.err.println("Error Code: " + e.getErrorCode());
+            System.err.println("Message: " + e.getMessage());
+            System.err.println("-------------------------------------\n");
+
+            if (e.getSQLState().equals("23505")) { // 'unique_violation' error code
+                return "Error: Username '" + newUser.getUsername() + "' or Email/IC already exists.";
+            }
+            e.printStackTrace();
+            throw new RemoteException("An error occurred during user creation.", e);
+        }
     }
 
 
     @Override
-    public List<User> getAllUsers(int adminUserId) throws RemoteException {
-        if (!isUserInRole(adminUserId, "HR")) {
-            throw new SecurityException("User does not have permission to view all users.");
+    public List<User> readAllUsers(int actorUserId) throws RemoteException {
+        // Step 1: Security Check
+        try {
+            if (!checkUserRole(actorUserId, Role.HR)) {
+                throw new SecurityException("Access Denied: User with ID " + actorUserId + " does not have HR privileges.");
+            }
+        } catch (SQLException e) {
+            throw new RemoteException("Could not verify user permissions.", e);
         }
 
         List<User> userList = new ArrayList<>();
-        String sql = "SELECT u.* FROM \"user\" u " +
-                "JOIN \"user_role\" ur ON u.id = ur.user_id " +
-                "JOIN \"role\" r ON ur.role_id = r.id " +
-                "WHERE u.status = 'ACTIVE' AND r.name = 'EMPLOYEE'";
+        // Step 2: Efficiently query users with their job and department info
+        String sql = "SELECT u.id, u.username, u.f_name, u.l_name, u.email, u.role, " +
+                "j.title, j.level, d.name AS department_name " +
+                "FROM public.\"user\" u " +
+                "LEFT JOIN public.job_titles j ON u.job_title_id = j.id " +
+                "LEFT JOIN public.departments d ON j.dept_id = d.id " +
+                "ORDER BY u.id ASC";
 
-        try (Statement stmt = dbConnection.createStatement(); ResultSet rs = stmt.executeQuery(sql)) {
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+
+            ResultSet rs = ps.executeQuery();
             while (rs.next()) {
-                userList.add(buildUserFromResultSet(rs));
+                User user = new User();
+                user.setId(rs.getInt("id"));
+                user.setUsername(rs.getString("username"));
+                user.setFName(rs.getString("f_name"));
+                user.setLName(rs.getString("l_name"));
+                user.setEmail(rs.getString("email"));
+                user.setRole(Role.valueOf(rs.getString("role")));
+
+                // Populate the new fields for display
+                user.setDepartmentName(rs.getString("department_name"));
+                user.setJobTitle(rs.getString("title") + " (" + rs.getString("level") + ")");
+
+                userList.add(user);
             }
+
         } catch (SQLException e) {
             e.printStackTrace();
-            throw new RemoteException("Could not fetch all users.", e);
+            throw new RemoteException("An error occurred while fetching the user list.", e);
         }
+
         return userList;
     }
 
-    // --- Helper Methods ---
-
-    /** A private helper to build a full User object from a ResultSet row. */
-    private User buildUserFromResultSet(ResultSet rs) throws SQLException {
-        User user = new User();
-        int userId = rs.getInt("id");
-        user.setId(userId);
-        user.setDepartmentId(rs.getInt("dept_id"));
-        user.setUsername(rs.getString("username"));
-        user.setFirstName(rs.getString("f_name"));
-        user.setLastName(rs.getString("l_name"));
-        user.setEmail(rs.getString("email"));
-        user.setPhoneNumber(rs.getString("phone"));
-        user.setIc(rs.getString("ic"));
-        // ... set other fields
-
-        // Fetch and set the user's roles
-        user.setRoles(getRolesForUser(userId));
-        return user;
-    }
-
-    /** A private helper to get all roles for a specific user. */
-    private List<Role> getRolesForUser(int userId) throws SQLException {
-        List<Role> roles = new ArrayList<>();
-        String sql = "SELECT r.id, r.name FROM \"role\" r JOIN \"user_role\" ur ON r.id = ur.role_id WHERE ur.user_id = ?";
-        try (PreparedStatement stmt = dbConnection.prepareStatement(sql)) {
-            stmt.setInt(1, userId);
-            ResultSet rs = stmt.executeQuery();
-            while (rs.next()) {
-                Role role = new Role();
-                role.setId(rs.getInt("id"));
-                role.setName(rs.getString("name"));
-                roles.add(role);
-            }
-        }
-        return roles;
-    }
-
-    /** A private helper to get all pay items for a specific payslip. */
-    private List<PayItem> getPayItemsForPayslip(int payslipId) throws SQLException {
-        List<PayItem> items = new ArrayList<>();
-        String sql = "SELECT * FROM \"pay_items\" WHERE payslip_id = ?";
-        try (PreparedStatement stmt = dbConnection.prepareStatement(sql)) {
-            stmt.setInt(1, payslipId);
-            ResultSet rs = stmt.executeQuery();
-            while(rs.next()) {
-                PayItem item = new PayItem();
-                item.setId(rs.getInt("id"));
-                item.setPayslipId(rs.getInt("payslip_id"));
-                item.setName(rs.getString("name"));
-                item.setType(PayItemType.valueOf(rs.getString("type")));
-                item.setAmount(rs.getBigDecimal("amount"));
-                items.add(item);
-            }
-        }
-        return items;
-    }
-
-    /** A helper to check if a user has a specific role. */
-    private boolean isUserInRole(int userId, String roleName) {
+    @Override
+    public User readUserById(int userId, int targetUserId) throws RemoteException {
         try {
-            List<Role> roles = getRolesForUser(userId);
-            for (Role role : roles) {
-                if (role.getName().equalsIgnoreCase(roleName)) {
-                    return true;
-                }
+            if (!checkUserRole(userId, Role.HR)) {
+                throw new SecurityException("Access Denied: User with ID " + userId + " does not have HR privileges.");
+            }
+        } catch (SQLException e) {
+            throw new RemoteException("Could not verify user permissions.", e);
+        }
+
+        // Add security check for HR role here
+        User user = null;
+        // This query is similar to the one in readAllUsers to get all necessary details
+        String sql = "SELECT u.*, j.title, j.level, d.name AS department_name " +
+                "FROM public.\"user\" u " +
+                "LEFT JOIN public.job_titles j ON u.job_title_id = j.id " +
+                "LEFT JOIN public.departments d ON j.dept_id = d.id " +
+                "WHERE u.id = ?";
+
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+
+            ps.setInt(1, targetUserId);
+            ResultSet rs = ps.executeQuery();
+
+            if (rs.next()) {
+                user = new User();
+                user.setId(rs.getInt("id"));
+                user.setUsername(rs.getString("username"));
+                user.setFName(rs.getString("f_name"));
+                user.setLName(rs.getString("l_name"));
+                user.setEmail(rs.getString("email"));
+                user.setPhone(rs.getString("phone"));
+                user.setIc(rs.getString("ic"));
+                user.setJobTitleId(rs.getInt("job_title_id"));
+                user.setEmpTypeId(rs.getInt("emp_type_id"));
+                user.setRole(Role.valueOf(rs.getString("role")));
+                // Set display fields
+                user.setDepartmentName(rs.getString("department_name"));
+                user.setJobTitle(rs.getString("title") + " (" + rs.getString("level") + ")");
             }
         } catch (SQLException e) {
             e.printStackTrace();
+            throw new RemoteException("Error fetching user details for ID: " + targetUserId, e);
         }
-        return false;
+        return user;
     }
-
-    /** A helper to insert a pay item record. */
-    private void insertPayItem(int payslipId, String name, PayItemType type, BigDecimal amount) throws SQLException {
-        String sql = "INSERT INTO \"pay_items\" (payslip_id, name, type, amount) VALUES (?, ?, ?, ?)";
-        try (PreparedStatement stmt = dbConnection.prepareStatement(sql)) {
-            stmt.setInt(1, payslipId);
-            stmt.setString(2, name);
-            stmt.setString(3, type.name());
-            stmt.setBigDecimal(4, amount);
-            stmt.executeUpdate();
-        }
-    }
-
-    /** A helper to calculate totals for a payslip object. */
-    private void calculatePayslipTotals(Payslip payslip) {
-        BigDecimal gross = BigDecimal.ZERO;
-        BigDecimal deductions = BigDecimal.ZERO;
-        for (PayItem item : payslip.getPayItems()) {
-            if (item.getType() == PayItemType.EARNING) {
-                gross = gross.add(item.getAmount());
-            } else {
-                deductions = deductions.add(item.getAmount());
-            }
-        }
-        payslip.setGrossEarnings(gross);
-        payslip.setTotalDeductions(deductions);
-        payslip.setNetPay(gross.subtract(deductions));
-    }
-
-    // Add these to PayrollServiceImpl.java
 
     @Override
-    public List<JobTitle> getAllJobTitles(int adminUserId) throws RemoteException {
-        if (!isUserInRole(adminUserId, "HR")) {
-            throw new SecurityException("User does not have permission to view job titles.");
+    public boolean updateUser(int userId, User user) throws RemoteException {
+        // Add security check for HR role here
+        String sql = "UPDATE public.\"user\" SET f_name = ?, l_name = ?, email = ?, phone = ?, " +
+                "ic = ?, job_title_id = ?, emp_type_id = ? WHERE id = ?";
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, user.getFName());
+            ps.setString(2, user.getLName());
+            ps.setString(3, user.getEmail());
+            ps.setString(4, user.getPhone());
+            ps.setString(5, user.getIc());
+            // Handle potential nulls for IDs
+            ps.setObject(6, user.getJobTitleId() == 0 ? null : user.getJobTitleId());
+            ps.setObject(7, user.getEmpTypeId() == 0 ? null : user.getEmpTypeId());
+            ps.setInt(8, user.getId());
+
+            int rowsAffected = ps.executeUpdate();
+            return rowsAffected > 0;
+        } catch (SQLException e) {
+            throw new RemoteException("Error updating user", e);
         }
+    }
+
+    private boolean checkUserRole(int userId, Role requiredRole) throws SQLException {
+        String sql = "SELECT role FROM public.\"user\" WHERE id = ?";
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, userId);
+            ResultSet rs = ps.executeQuery();
+            if (rs.next()) {
+                Role userRole = Role.valueOf(rs.getString("role").toUpperCase());
+                return userRole == requiredRole;
+            }
+        }
+        return false; // User not found
+    }
+
+    @Override
+    public List<JobTitle> getAllJobTitles(int userId) throws RemoteException {
         List<JobTitle> jobTitles = new ArrayList<>();
-        String sql = "SELECT * FROM \"job_titles\" ORDER BY dept_id, level";
-        try (Statement stmt = dbConnection.createStatement(); ResultSet rs = stmt.executeQuery(sql)) {
+        String sql = "SELECT id, dept_id, title, level, description FROM public.job_titles ORDER BY id";
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ResultSet rs = ps.executeQuery();
             while (rs.next()) {
-                JobTitle jobTitle = new JobTitle();
-                jobTitle.setId(rs.getInt("id"));
-                jobTitle.setDeptId(rs.getInt("dept_id"));
-                jobTitle.setTitle(rs.getString("title"));
-                jobTitle.setLevel(rs.getString("level"));
-                jobTitles.add(jobTitle);
+                JobTitle job = new JobTitle();
+                job.setId(rs.getInt("id"));
+                job.setDeptId(rs.getInt("dept_id"));
+                job.setTitle(rs.getString("title"));
+                job.setLevel(rs.getString("level")); // This was the missing part
+                job.setDescription(rs.getString("description"));
+                jobTitles.add(job);
             }
         } catch (SQLException e) {
-            throw new RemoteException("Error fetching job titles.", e);
+            throw new RemoteException("Error fetching employment types", e);
         }
         return jobTitles;
     }
 
     @Override
-    public boolean updatePayTemplateItem(int adminUserId, int payTemplateItemId, BigDecimal newAmount) throws RemoteException {
-        if (!isUserInRole(adminUserId, "HR")) {
-            throw new SecurityException("User does not have permission to update pay templates.");
-        }
-        String sql = "UPDATE \"pay_templates\" SET amount = ? WHERE id = ?";
-        try (PreparedStatement stmt = dbConnection.prepareStatement(sql)) {
-            stmt.setBigDecimal(1, newAmount);
-            stmt.setInt(2, payTemplateItemId);
-            int rowsAffected = stmt.executeUpdate();
-            return rowsAffected > 0;
+    public List<EmpType> getAllEmpTypes(int userId) throws RemoteException {
+        List<EmpType> empTypes = new ArrayList<>();
+        String sql = "SELECT id, name FROM public.emp_types ORDER BY id";
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+                EmpType type = new EmpType();
+                type.setId(rs.getInt("id"));
+                type.setName(rs.getString("name"));
+                empTypes.add(type);
+            }
         } catch (SQLException e) {
-            throw new RemoteException("Error updating pay template item.", e);
+            throw new RemoteException("Error fetching employment types", e);
         }
+        return empTypes;
     }
 
-    // Add this method to PayrollServiceImpl.java
 
     @Override
-    public List<PayTemplate> getPayTemplatesForJobTitle(int adminUserId, int jobTitleId) throws RemoteException {
-        if (!isUserInRole(adminUserId, "HR")) {
-            throw new SecurityException("User does not have permission to view pay templates.");
-        }
-
+    public List<PayTemplate> getPayTemplatesForJobTitle(int actorUserId, int jobTitleId) throws RemoteException {
+        // Add security check for HR role here
         List<PayTemplate> templates = new ArrayList<>();
-        String sql = "SELECT * FROM \"pay_templates\" WHERE job_title_id = ?";
-
-        try (PreparedStatement stmt = dbConnection.prepareStatement(sql)) {
-            stmt.setInt(1, jobTitleId);
-            ResultSet rs = stmt.executeQuery();
-
+        String sql = "SELECT id, job_title_id, description, type, amount FROM public.pay_templates WHERE job_title_id = ?";
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, jobTitleId);
+            ResultSet rs = ps.executeQuery();
             while (rs.next()) {
                 PayTemplate item = new PayTemplate();
                 item.setId(rs.getInt("id"));
-                item.setJob_title_id(rs.getInt("job_title_id"));
+                item.setJobTitleId(rs.getInt("job_title_id"));
                 item.setDescription(rs.getString("description"));
-                // Convert the String from the DB back to a PayItemType enum
                 item.setType(PayItemType.valueOf(rs.getString("type")));
                 item.setAmount(rs.getBigDecimal("amount"));
                 templates.add(item);
             }
         } catch (SQLException e) {
-            e.printStackTrace();
-            throw new RemoteException("Error fetching pay templates for job title ID: " + jobTitleId, e);
+            throw new RemoteException("Error fetching pay templates", e);
         }
         return templates;
     }
+
+    @Override
+    public boolean updatePayTemplateItem(int actorUserId, int payTemplateItemId, BigDecimal newAmount) throws RemoteException {
+        // Add security check for HR role here
+        String sql = "UPDATE public.pay_templates SET amount = ? WHERE id = ?";
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setBigDecimal(1, newAmount);
+            ps.setInt(2, payTemplateItemId);
+            int rowsAffected = ps.executeUpdate();
+            return rowsAffected > 0;
+        } catch (SQLException e) {
+            throw new RemoteException("Error updating pay template item", e);
+        }
+    }
+
+    // Add these two new methods to your PayrollServiceImpl.java class
+
+    @Override
+    public PayTemplate addPayTemplateItem(int actorUserId, PayTemplate newItem) throws RemoteException {
+        // Add security check for HR role here
+        String sql = "INSERT INTO public.pay_templates (job_title_id, emp_type_id, description, type, amount) " +
+                "VALUES (?, ?, ?, CAST(? AS pay_item_type_enum), ?) RETURNING id";
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+
+            ps.setInt(1, newItem.getJobTitleId());
+            ps.setObject(2, newItem.getEmpTypeId() == 0 ? null : newItem.getEmpTypeId());
+            ps.setString(3, newItem.getDescription());
+            ps.setString(4, newItem.getType().name());
+            ps.setBigDecimal(5, newItem.getAmount());
+
+            ResultSet rs = ps.executeQuery(); // Use executeQuery for RETURNING
+            if (rs.next()) {
+                newItem.setId(rs.getInt(1)); // Set the new ID on the object
+                return newItem;
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+            throw new RemoteException("Error adding pay template item", e);
+        }
+        return null;
+    }
+
+    @Override
+    public boolean deletePayTemplateItem(int userId, int payTemplateItemId) throws RemoteException {
+        // Add security check for HR role here
+        String sql = "DELETE FROM public.pay_templates WHERE id = ?";
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, payTemplateItemId);
+            int rowsAffected = ps.executeUpdate();
+            return rowsAffected > 0;
+        } catch (SQLException e) {
+            e.printStackTrace();
+            throw new RemoteException("Error deleting pay template item", e);
+        }
+    }
+
+    // In PayrollServiceImpl.java
+
+    @Override
+    public String runMonthlyPayroll(int actorUserId, int year, int month) throws RemoteException {
+        // 1. Security Check: Ensure the user is an HR admin
+        try {
+            if (!checkUserRole(actorUserId, Role.HR)) {
+                throw new SecurityException("Access Denied: You do not have HR privileges to run payroll.");
+            }
+        } catch (SQLException e) {
+            throw new RemoteException("Could not verify user permissions.", e);
+        }
+
+        // 2. Define the pay period for this run
+        LocalDate payPeriodStart = LocalDate.of(year, month, 1);
+        LocalDate payPeriodEnd = payPeriodStart.withDayOfMonth(payPeriodStart.lengthOfMonth());
+        System.out.printf("--- Starting Payroll Run for %d-%02d ---\n", year, month);
+
+        // 3. Get all employees to be paid (e.g., all 'ACTIVE' users)
+        List<User> employeesToPay = new ArrayList<>();
+        String fetchUsersSql = "SELECT id, username, f_name, l_name, job_title_id, emp_type_id FROM public.\"user\" WHERE status = 'ACTIVE'";
+        try (Connection conn = DatabaseManager.getConnection(); PreparedStatement ps = conn.prepareStatement(fetchUsersSql)) {
+            ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+                User u = new User();
+                u.setId(rs.getInt("id"));
+                u.setUsername(rs.getString("username"));
+                u.setJobTitleId(rs.getInt("job_title_id"));
+                u.setEmpTypeId(rs.getInt("emp_type_id"));
+                employeesToPay.add(u);
+            }
+        } catch (SQLException e) {
+            throw new RemoteException("Could not fetch list of employees.", e);
+        }
+
+        // 4. Process each employee one by one
+        int successCount = 0;
+        int failureCount = 0;
+        int skippedCount = 0;
+
+        for (User employee : employeesToPay) {
+            try (Connection conn = DatabaseManager.getConnection()) {
+                // Check if a payslip already exists for this user and period
+                String checkSql = "SELECT id FROM payslip WHERE user_id = ? AND pay_period_start_date = ?";
+                PreparedStatement checkPs = conn.prepareStatement(checkSql);
+                checkPs.setInt(1, employee.getId());
+                checkPs.setDate(2, java.sql.Date.valueOf(payPeriodStart));
+                if (checkPs.executeQuery().next()) {
+                    System.out.printf("Skipping %s: Payslip for this period already exists.\n", employee.getUsername());
+                    skippedCount++;
+                    continue; // Move to the next employee
+                }
+
+                // If it doesn't exist, process it
+                processPayrollForEmployee(employee, payPeriodStart, payPeriodEnd);
+                System.out.printf("Successfully processed payroll for: %s\n", employee.getUsername());
+                successCount++;
+            } catch (Exception e) {
+                System.err.printf("!!! FAILED to process payroll for %s: %s\n", employee.getUsername(), e.getMessage());
+                failureCount++;
+            }
+        }
+
+        String summary = String.format("Payroll run for %d-%02d complete. Processed: %d, Skipped: %d, Failed: %d.",
+                year, month, successCount, skippedCount, failureCount);
+        System.out.println(summary);
+        return summary;
+    }
+
+    // In PayrollServiceImpl.java, PLEASE REPLACE the entire method with this correct version.
+
+    private void processPayrollForEmployee(User employee, LocalDate startDate, LocalDate endDate) throws SQLException {
+        List<PayItem> finalPayItems = new ArrayList<>();
+        BigDecimal grossPay = BigDecimal.ZERO;
+
+        try (Connection conn = DatabaseManager.getConnection()) {
+            conn.setAutoCommit(false); // START TRANSACTION
+            try {
+                // Step A: Gather all RULES from pay_templates
+                Map<String, PayTemplate> rules = new HashMap<>();
+                String rulesSql = "SELECT * FROM pay_templates WHERE (job_title_id IS NULL AND emp_type_id IS NULL) OR (job_title_id IS NULL AND emp_type_id = ?) OR (job_title_id = ?)";
+                try (PreparedStatement ps = conn.prepareStatement(rulesSql)) {
+                    ps.setInt(1, employee.getEmpTypeId());
+                    ps.setInt(2, employee.getJobTitleId());
+                    ResultSet rs = ps.executeQuery();
+                    while (rs.next()) {
+                        PayTemplate item = new PayTemplate();
+                        item.setDescription(rs.getString("description"));
+                        item.setType(PayItemType.valueOf(rs.getString("type")));
+                        item.setAmount(rs.getBigDecimal("amount"));
+                        rules.put(item.getDescription(), item);
+                    }
+                }
+
+                // Step B: Calculate Gross Pay from EARNING rules
+                for (PayTemplate rule : rules.values()) {
+                    if (rule.getType() == PayItemType.EARNING && !rule.getDescription().contains("Leave Entitlement")) {
+                        grossPay = grossPay.add(rule.getAmount());
+                        PayItem earningItem = new PayItem();
+                        earningItem.setName(rule.getDescription());
+                        earningItem.setType(PayItemType.EARNING);
+                        earningItem.setAmount(rule.getAmount());
+                        finalPayItems.add(earningItem);
+                    }
+                }
+
+                // Step C: Calculate Deductions (including percentages)
+                BigDecimal totalDeductions = BigDecimal.ZERO;
+                for (PayTemplate rule : rules.values()) {
+                    if (rule.getType() == PayItemType.DEDUCTION) {
+                        BigDecimal deductionAmount;
+                        if (rule.getDescription().contains("EPF") || rule.getDescription().contains("EIS")) {
+                            deductionAmount = grossPay.multiply(rule.getAmount());
+                        } else {
+                            deductionAmount = rule.getAmount();
+                        }
+                        totalDeductions = totalDeductions.add(deductionAmount);
+                        PayItem deductionItem = new PayItem();
+                        deductionItem.setName(rule.getDescription());
+                        deductionItem.setType(PayItemType.DEDUCTION);
+                        deductionItem.setAmount(deductionAmount.setScale(2, RoundingMode.HALF_UP));
+                        finalPayItems.add(deductionItem);
+                    }
+                }
+                BigDecimal netPay = grossPay.subtract(totalDeductions);
+
+                // Step D: Save the final historical record
+                String payslipSql = "INSERT INTO payslip (user_id, pay_period_start_date, pay_period_end_date, gross_earnings, total_deductions, net_pay) VALUES (?, ?, ?, ?, ?, ?) RETURNING id";
+                int newPayslipId;
+                try (PreparedStatement ps = conn.prepareStatement(payslipSql)) {
+                    ps.setInt(1, employee.getId());
+                    ps.setDate(2, java.sql.Date.valueOf(startDate));
+                    ps.setDate(3, java.sql.Date.valueOf(endDate));
+                    ps.setBigDecimal(4, grossPay.setScale(2, RoundingMode.HALF_UP));
+                    ps.setBigDecimal(5, totalDeductions.setScale(2, RoundingMode.HALF_UP));
+                    ps.setBigDecimal(6, netPay.setScale(2, RoundingMode.HALF_UP));
+                    ResultSet rs = ps.executeQuery();
+                    rs.next();
+                    newPayslipId = rs.getInt(1);
+                }
+
+                String itemsSql = "INSERT INTO pay_items (payslip_id, name, type, amount) VALUES (?, ?, CAST(? AS pay_item_type_enum), ?)";
+                try (PreparedStatement ps = conn.prepareStatement(itemsSql)) {
+                    for (PayItem item : finalPayItems) {
+                        ps.setInt(1, newPayslipId);
+                        ps.setString(2, item.getName());
+                        ps.setString(3, item.getType().name());
+                        ps.setBigDecimal(4, item.getAmount());
+                        ps.addBatch();
+                    }
+                    ps.executeBatch();
+                }
+
+                conn.commit(); // COMMIT TRANSACTION
+            } catch (Exception e) {
+                conn.rollback(); // ROLLBACK TRANSACTION ON ERROR
+                throw new SQLException(e);
+            }
+        }
+    }
+
+
+    @Override
+    public Payslip getPayslipForUser(int actorUserId, int targetUserId, int year, int month) throws RemoteException {
+        // Step 1: Security Check for HR role
+        try {
+            if (!checkUserRole(actorUserId, Role.HR)) {
+                throw new SecurityException("Access Denied: You do not have HR privileges to view payslips.");
+            }
+        } catch (SQLException e) {
+            throw new RemoteException("Could not verify user permissions.", e);
+        }
+
+        // Step 2: Define the pay period we are searching for
+        LocalDate payPeriodStart = LocalDate.of(year, month, 1);
+        Payslip payslip = null;
+        int payslipId = -1;
+
+        // Step 3: Find the specific payslip's ID using the user and date
+        String findPayslipSql = "SELECT id FROM public.payslip WHERE user_id = ? AND pay_period_start_date = ?";
+
+        try (Connection conn = DatabaseManager.getConnection()) {
+            // First, execute the search to find the correct payslip
+            try (PreparedStatement ps = conn.prepareStatement(findPayslipSql)) {
+                ps.setInt(1, targetUserId);
+                ps.setDate(2, java.sql.Date.valueOf(payPeriodStart));
+                ResultSet rs = ps.executeQuery();
+                if (rs.next()) {
+                    payslipId = rs.getInt("id");
+                } else {
+                    return null; // No payslip found for that user and period
+                }
+            }
+
+            // Step 4: If we found a payslipId, fetch all its details
+            // This logic is identical to getMyLatestPayslip
+            String payslipDetailsSql = "SELECT * FROM payslip WHERE id = ?";
+            String itemsSql = "SELECT name, type, amount FROM pay_items WHERE payslip_id = ?";
+
+            payslip = new Payslip();
+            payslip.setId(payslipId);
+
+            try (PreparedStatement psPayslip = conn.prepareStatement(payslipDetailsSql)) {
+                psPayslip.setInt(1, payslipId);
+                ResultSet rsPayslip = psPayslip.executeQuery();
+                if(rsPayslip.next()) {
+                    payslip.setPayPeriodStartDate(rsPayslip.getDate("pay_period_start_date").toLocalDate());
+                    payslip.setPayPeriodEndDate(rsPayslip.getDate("pay_period_end_date").toLocalDate());
+                }
+            }
+
+            BigDecimal gross = BigDecimal.ZERO;
+            BigDecimal deductions = BigDecimal.ZERO;
+            try (PreparedStatement psItems = conn.prepareStatement(itemsSql)) {
+                psItems.setInt(1, payslipId);
+                ResultSet rsItems = psItems.executeQuery();
+                while (rsItems.next()) {
+                    PayItem item = new PayItem();
+                    item.setName(rsItems.getString("name"));
+                    item.setAmount(rsItems.getBigDecimal("amount"));
+                    PayItemType type = PayItemType.valueOf(rsItems.getString("type"));
+                    item.setType(type);
+                    payslip.getPayItems().add(item);
+
+                    if (type == PayItemType.EARNING) {
+                        gross = gross.add(item.getAmount());
+                    } else {
+                        deductions = deductions.add(item.getAmount());
+                    }
+                }
+            }
+            payslip.setGrossEarnings(gross);
+            payslip.setTotalDeductions(deductions);
+            payslip.setNetPay(gross.subtract(deductions));
+
+        } catch (SQLException e) {
+            e.printStackTrace();
+            throw new RemoteException("Error fetching payslip for user " + targetUserId, e);
+        }
+
+        return payslip;
+    }
+
+    @Override
+    public List<PayslipSummary> getAllPayslips(int actorUserId) throws RemoteException {
+        // Add security check for HR role here
+        List<PayslipSummary> summaries = new ArrayList<>();
+        String sql = "SELECT p.id, p.user_id, u.f_name, u.l_name, p.pay_period_start_date, p.net_pay " +
+                "FROM public.payslip p " +
+                "JOIN public.\"user\" u ON p.user_id = u.id " +
+                "ORDER BY p.pay_period_start_date DESC, u.l_name ASC";
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+                PayslipSummary summary = new PayslipSummary();
+                summary.setPayslipId(rs.getInt("id"));
+                summary.setUserId(rs.getInt("user_id"));
+                summary.setUserFullName(rs.getString("f_name") + " " + rs.getString("l_name"));
+                summary.setPayPeriodStartDate(rs.getDate("pay_period_start_date").toLocalDate());
+                summary.setNetPay(rs.getBigDecimal("net_pay"));
+                summaries.add(summary);
+            }
+        } catch (SQLException e) {
+            throw new RemoteException("Error fetching payslip summaries", e);
+        }
+        return summaries;
+    }
+
 }

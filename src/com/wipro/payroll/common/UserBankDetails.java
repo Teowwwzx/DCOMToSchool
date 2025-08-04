@@ -15,31 +15,24 @@ public class UserBankDetails implements Serializable {
     public int getUserId() {
         return userId;
     }
-
     public void setUserId(int userId) {
         this.userId = userId;
     }
-
     public String getBankName() {
         return bankName;
     }
-
     public void setBankName(String bankName) {
         this.bankName = bankName;
     }
-
     public String getAccountNumber() {
         return accountNumber;
     }
-
     public void setAccountNumber(String accountNumber) {
         this.accountNumber = accountNumber;
     }
-
     public String getAccountHolderName() {
         return accountHolderName;
     }
-
     public void setAccountHolderName(String accountHolderName) {
         this.accountHolderName = accountHolderName;
     }

@@ -1,6 +1,10 @@
 package com.wipro.payroll.server;
 
 import org.mindrot.jbcrypt.BCrypt;
+
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.security.MessageDigest;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -17,25 +21,22 @@ import java.time.LocalDateTime;
  */
 public class DataSeeder {
 
-    // --- Configuration ---
-    // IMPORTANT: Use the same credentials as your PayrollServiceImpl
-    private static final String DB_URL = "jdbc:postgresql://ep-withered-flower-a811hc2n-pooler.eastus2.azure.neon.tech:5432/neondb?sslmode=require&channel_binding=require";
-    private static final String DB_USER = "neondb_owner";
-    private static final String DB_PASSWORD = "npg_4A1VduWMcaYT";
-
     public static void main(String[] args) {
-        try (Connection conn = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD)) {
+        // MODIFIED: Use the connection pool from DatabaseManager
+        try (Connection conn = DatabaseManager.getConnection()) {
             System.out.println("✅ Database connection successful.");
 
-            // Run the seeding methods in order of dependency
-            seedBasicTables(conn);
-            emp_types(conn);
-            job_titles(conn);
-            pay_templates(conn);
-            seedUsers(conn);
-            seedUserRoles(conn);
-            seedUserDetails(conn);
-            seedVariableData(conn);
+            // 1. Refresh the database to a clean state
+            refreshDatabase(conn);
+
+            // 2. Run the seeding methods in order of dependency
+            seedLookupTables(conn); // Departments and Employment Types
+            seedJobTitles(conn);
+            seedPayTemplates(conn);
+            seedUsersAndDetails(conn); // Users, Bank Details, and Variable Data
+            seedBonuses(conn);
+            seedAttendance(conn);
+            syncIdSequence(conn, "user");
 
             System.out.println("\n✅✅✅ Database seeding complete! ✅✅✅");
 
@@ -45,89 +46,108 @@ public class DataSeeder {
         }
     }
 
-    private static void seedBasicTables(Connection conn) throws SQLException {
-        System.out.println("Seeding basic lookup tables (departments, roles)...");
-        // Using ON CONFLICT DO NOTHING is a safe way to prevent errors if the data already exists.
-        executeSql(conn, "INSERT INTO \"departments\" (id, name, description) VALUES (1, 'IT', 'Information Technology'), (2, 'Logistics', 'Shipping and Warehouse'), (3, 'Human Resources', 'Manages company personnel') ON CONFLICT (id) DO NOTHING;");
-        executeSql(conn, "INSERT INTO \"role\" (id, name) VALUES (1, 'EMPLOYEE'), (2, 'HR'), (3, 'MANAGER') ON CONFLICT (id) DO NOTHING;");
+    private static void refreshDatabase(Connection conn) throws SQLException {
+        System.out.println("⚠️  Refreshing database... ALL DATA WILL BE DELETED.");
+        // TRUNCATE is fast. RESTART IDENTITY resets the auto-incrementing IDs. CASCADE wipes dependent tables.
+        String sql = "TRUNCATE public.departments, public.emp_types, public.job_titles, public.\"user\" RESTART IDENTITY CASCADE;";
+        try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.execute();
+            System.out.println("✅ Database tables wiped and ID counters reset.");
+        }
     }
 
-    private static void emp_types(Connection conn) throws SQLException {
-        System.out.println("Seeding job structure tables (emp_types)...");
-        executeSql(conn, "INSERT INTO \"emp_types\" (id, name) VALUES (1, 'Full-Time'), (2, 'Part-Time'), (3, 'Contract') ON CONFLICT (id) DO NOTHING;");
+    private static void seedLookupTables(Connection conn) throws SQLException {
+        System.out.println("Seeding lookup tables (departments, emp_types)...");
+        // MODIFIED: Departments updated for an IT company
+        executeSql(conn, "INSERT INTO \"departments\" (id, name) VALUES (1, 'Engineering'), (2, 'Product'), (3, 'Human Resources') ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name;");
+        executeSql(conn, "INSERT INTO \"emp_types\" (id, name) VALUES (1, 'Full-Time'), (2, 'Contract') ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name;");
     }
 
-    private static void job_titles(Connection conn) throws SQLException {
-        System.out.println("Seeding job structure tables (job_titles)...");
-        executeSql(conn, "INSERT INTO \"job_titles\" (id, dept_id, title, level) VALUES (1, 1, 'Data Analyst', 'Junior'), (2, 1, 'Data Analyst', 'Senior'), (3, 3, 'HR Administrator', 'Senior'), (4, 2, 'Logistics Manager', 'Lead'), (5, 2, 'Warehouse Assistant', 'Junior') ON CONFLICT (id) DO NOTHING;");
+    private static void seedJobTitles(Connection conn) throws SQLException {
+        System.out.println("Seeding job titles...");
+        // MODIFIED: Job titles updated for an IT company
+        executeSql(conn, "INSERT INTO \"job_titles\" (id, dept_id, title, level) VALUES (1, 1, 'Engineering Manager', 'Lead'), (2, 3, 'HR Business Partner', 'Senior'), (3, 1, 'Software Engineer', 'Senior'), (4, 1, 'QA Engineer', 'Junior') ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title;");
     }
 
-    private static void pay_templates(Connection conn) throws SQLException {
-        System.out.println("Seeding job structure tables (pay_templates)...");
-        executeSql(conn, "INSERT INTO \"pay_templates\" (job_title_id, description, type, amount) VALUES " +
-                "(1, 'Base Salary', 'EARNING', 4500.00), " + // <-- ADD THIS LINE
-                "(2, 'Base Salary', 'EARNING', 8000.00), " +
-                "(2, 'Tech Allowance', 'EARNING', 500.00), " +
-                "(3, 'Base Salary', 'EARNING', 7500.00), " +
-                "(4, 'Base Salary', 'EARNING', 9000.00), " +
-                "(4, 'Manager Allowance', 'EARNING', 1500.00), " +
-                "(5, 'Hourly Rate', 'EARNING', 20.00) ON CONFLICT DO NOTHING;");
+    private static void seedPayTemplates(Connection conn) throws SQLException {
+        System.out.println("Seeding realistic, hierarchical compensation templates for Malaysia...");
+
+        executeSql(conn, "TRUNCATE public.pay_templates RESTART IDENTITY CASCADE;");
+
+        String sql = "INSERT INTO public.pay_templates (job_title_id, emp_type_id, description, type, amount) VALUES (?, ?, ?, CAST(? AS pay_item_type_enum), ?)";
+
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            // --- Level 1: Global Default Rules (apply to all employees in Malaysia) ---
+            ps.setObject(1, null); ps.setObject(2, null); ps.setString(3, "EPF Employee (11%)"); ps.setString(4, "DEDUCTION"); ps.setBigDecimal(5, new BigDecimal("0.11")); // Stored as percentage rate
+            ps.addBatch();
+            ps.setObject(1, null); ps.setObject(2, null); ps.setString(3, "SOCSO Contribution"); ps.setString(4, "DEDUCTION"); ps.setBigDecimal(5, new BigDecimal("24.75")); // Placeholder amount for mid-range salary
+            ps.addBatch();
+            ps.setObject(1, null); ps.setObject(2, null); ps.setString(3, "EIS Contribution (0.2%)"); ps.setString(4, "DEDUCTION"); ps.setBigDecimal(5, new BigDecimal("0.002")); // Stored as percentage rate
+            ps.addBatch();
+
+            // --- Level 2: Employment Type Rules ---
+            // For Full-Time staff (emp_type_id = 1)
+            ps.setObject(1, null); ps.setInt(2, 1); ps.setString(3, "Annual Leave Entitlement"); ps.setString(4, "EARNING"); ps.setBigDecimal(5, new BigDecimal("14.00")); // 14 days
+            ps.addBatch();
+            // For Contract staff (emp_type_id = 2)
+            ps.setObject(1, null); ps.setInt(2, 2); ps.setString(3, "Annual Leave Entitlement"); ps.setString(4, "EARNING"); ps.setBigDecimal(5, new BigDecimal("0.00")); // 0 days
+            ps.addBatch();
+
+            // --- Level 3: Job Title Rules (with more realistic KL IT salaries) ---
+            // For Engineering Manager (job_title_id = 1)
+            ps.setInt(1, 1); ps.setObject(2, null); ps.setString(3, "Base Salary"); ps.setString(4, "EARNING"); ps.setBigDecimal(5, new BigDecimal("16000.00"));
+            ps.addBatch();
+            ps.setInt(1, 1); ps.setObject(2, null); ps.setString(3, "Management Bonus"); ps.setString(4, "EARNING"); ps.setBigDecimal(5, new BigDecimal("2500.00"));
+            ps.addBatch();
+
+            // For HR Business Partner (job_title_id = 2)
+            ps.setInt(1, 2); ps.setObject(2, null); ps.setString(3, "Base Salary"); ps.setString(4, "EARNING"); ps.setBigDecimal(5, new BigDecimal("9000.00"));
+            ps.addBatch();
+
+            // For Senior Software Engineer (job_title_id = 3)
+            ps.setInt(1, 3); ps.setObject(2, null); ps.setString(3, "Base Salary"); ps.setString(4, "EARNING"); ps.setBigDecimal(5, new BigDecimal("8500.00"));
+            ps.addBatch();
+            ps.setInt(1, 3); ps.setObject(2, null); ps.setString(3, "Tech Allowance"); ps.setString(4, "EARNING"); ps.setBigDecimal(5, new BigDecimal("500.00"));
+            ps.addBatch();
+
+            // For Junior QA Engineer (job_title_id = 4)
+            ps.setInt(1, 4); ps.setObject(2, null); ps.setString(3, "Base Salary"); ps.setString(4, "EARNING"); ps.setBigDecimal(5, new BigDecimal("4000.00"));
+            ps.addBatch();
+
+            ps.executeBatch();
+        }
     }
 
-    private static void seedUsers(Connection conn) throws SQLException {
-        System.out.println("Seeding users (with hashed passwords)...");
-        String sql = "INSERT INTO \"user\" (id, job_title_id, emp_type_id, username, f_name, l_name, email, phone, ic, pwd_hash, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS user_status_enum)) ON CONFLICT (id) DO NOTHING;";
+    private static void seedUsersAndDetails(Connection conn) throws SQLException {
+        System.out.println("Seeding users (with SHA-256 passwords) and their details...");
+
+        String sql = "INSERT INTO \"user\" (id, job_title_id, emp_type_id, username, f_name, l_name, email, phone, ic, pwd_hash, status, role) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS user_status_enum), CAST(? AS role_enum))";
 
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
-            // Password for everyone is "password123"
-            String hashedPassword = BCrypt.hashpw("123123123", BCrypt.gensalt(12));
+            // MODIFIED: Password for all users is "123123123"
+            String hashedPassword = hashPassword("123123123");
 
-            // User 1: Alice (Senior Data Analyst)
-            stmt.setInt(1, 1); stmt.setInt(2, 2); stmt.setInt(3, 1); stmt.setString(4, "it"); stmt.setString(5, "Alice"); stmt.setString(6, "Tan"); stmt.setString(7, "it@gmail.com"); stmt.setString(8, "012-3456789"); stmt.setString(9, "900101-10-1234"); stmt.setString(10, hashedPassword); stmt.setString(11, "ACTIVE");
+            // User 1: The Manager
+            stmt.setInt(1, 1); stmt.setInt(2, 1); stmt.setInt(3, 1); stmt.setString(4, "mng"); stmt.setString(5, "tan"); stmt.setString(6, "wh"); stmt.setString(7, "mng@gmail.com"); stmt.setString(8, "011-11111111"); stmt.setString(9, "030101-10-1111"); stmt.setString(10, hashedPassword); stmt.setString(11, "ACTIVE"); stmt.setString(12, "MANAGER");
             stmt.addBatch();
 
-            // User 2: Bob (Logistics Manager)
-            stmt.setInt(1, 2); stmt.setInt(2, 4); stmt.setInt(3, 1); stmt.setString(4, "mng"); stmt.setString(5, "Bob"); stmt.setString(6, "Lee"); stmt.setString(7, "mng@gmail.com"); stmt.setString(8, "013-4567890"); stmt.setString(9, "850202-14-2345"); stmt.setString(10, hashedPassword); stmt.setString(11, "ACTIVE");
+            // User 2: The HR person
+            stmt.setInt(1, 2); stmt.setInt(2, 2); stmt.setInt(3, 1); stmt.setString(4, "hr"); stmt.setString(5, "tan"); stmt.setString(6, "zx"); stmt.setString(7, "hr@gmail.com"); stmt.setString(8, "012-2222222"); stmt.setString(9, "030202-14-2222"); stmt.setString(10, hashedPassword); stmt.setString(11, "ACTIVE"); stmt.setString(12, "HR");
             stmt.addBatch();
 
-            // User 3: Charlie (HR Admin)
-            stmt.setInt(1, 3); stmt.setInt(2, 3); stmt.setInt(3, 1); stmt.setString(4, "hr"); stmt.setString(5, "Charlie"); stmt.setString(6, "Lim"); stmt.setString(7, "hr@gmail.com"); stmt.setString(8, "880303-01-3456"); stmt.setString(9, "880303-01-3456"); stmt.setString(10, hashedPassword); stmt.setString(11, "ACTIVE");
+            // User 3: Employee 1 (Software Engineer)
+            stmt.setInt(1, 3); stmt.setInt(2, 3); stmt.setInt(3, 1); stmt.setString(4, "emp1"); stmt.setString(5, "teow"); stmt.setString(6, "zx"); stmt.setString(7, "emp1@gmail.com"); stmt.setString(8, "013-3333333"); stmt.setString(9, "030303-01-3333"); stmt.setString(10, hashedPassword); stmt.setString(11, "ACTIVE"); stmt.setString(12, "EMPLOYEE");
             stmt.addBatch();
 
-            // User 4: Pat (Part-timer)
-            stmt.setInt(1, 4); stmt.setInt(2, 5); stmt.setInt(3, 2); stmt.setString(4, "log"); stmt.setString(5, "Pat"); stmt.setString(6, "Wong"); stmt.setString(7, "log@gmail.com"); stmt.setString(8, "016-6789012"); stmt.setString(9, "950404-10-4567"); stmt.setString(10, hashedPassword); stmt.setString(11, "ACTIVE");
+            // User 4: Employee 2 (QA Engineer)
+            stmt.setInt(1, 4); stmt.setInt(2, 4); stmt.setInt(3, 1); stmt.setString(4, "emp2"); stmt.setString(5, "siew"); stmt.setString(6, "lx"); stmt.setString(7, "emp2@gmail.com"); stmt.setString(8, "014-4444444"); stmt.setString(9, "020404-10-4444"); stmt.setString(10, hashedPassword); stmt.setString(11, "ACTIVE"); stmt.setString(12, "EMPLOYEE");
             stmt.addBatch();
 
             stmt.executeBatch();
         }
-    }
 
-    private static void seedUserRoles(Connection conn) throws SQLException {
-        System.out.println("Seeding user roles...");
-        executeSql(conn, "INSERT INTO \"user_role\" (user_id, role_id) VALUES (1, 1), (2, 1), (2, 3), (3, 1), (3, 2), (4, 1) ON CONFLICT DO NOTHING;");
-    }
-
-    private static void seedUserDetails(Connection conn) throws SQLException {
-        System.out.println("Seeding user details (bank, address)...");
-        executeSql(conn, "INSERT INTO \"user_bank_details\" (user_id, bank_name, acc_no, acc_name) VALUES (1, 'Maybank', '114812345678', 'Alice Tan') ON CONFLICT (user_id) DO NOTHING;");
-        executeSql(conn, "INSERT INTO \"user_address\" (user_id, street_line_1, city, state, postcode, country) VALUES (1, '123 Jalan Teknologi', 'Bukit Jalil', 'Kuala Lumpur', '57000', 'Malaysia') ON CONFLICT DO NOTHING;");
-    }
-
-    private static void seedVariableData(Connection conn) throws SQLException {
-        System.out.println("Seeding variable data (bonuses, attendances)...");
-        executeSql(conn, "INSERT INTO \"bonuses\" (user_id, pay_period_start_date, name, type, amount, is_approved, approved_by_id) VALUES (1, '2025-07-01', 'Q2 Performance Bonus', 'EARNING', 1000.00, true, 2) ON CONFLICT DO NOTHING;");
-
-        String sql = "INSERT INTO \"attendances\" (user_id, clock_in, clock_out, is_approved, approved_by_id) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING;";
-        try (PreparedStatement stmt = conn.prepareStatement(sql)) {
-            // Pat worked 21 hours in July
-            stmt.setInt(1, 4); stmt.setTimestamp(2, Timestamp.valueOf(LocalDateTime.of(2025, 7, 2, 9, 0))); stmt.setTimestamp(3, Timestamp.valueOf(LocalDateTime.of(2025, 7, 2, 17, 0))); stmt.setBoolean(4, true); stmt.setInt(5, 2);
-            stmt.addBatch();
-            stmt.setInt(1, 4); stmt.setTimestamp(2, Timestamp.valueOf(LocalDateTime.of(2025, 7, 3, 9, 0))); stmt.setTimestamp(3, Timestamp.valueOf(LocalDateTime.of(2025, 7, 3, 13, 0))); stmt.setBoolean(4, true); stmt.setInt(5, 2);
-            stmt.addBatch();
-            stmt.setInt(1, 4); stmt.setTimestamp(2, Timestamp.valueOf(LocalDateTime.of(2025, 7, 4, 9, 0))); stmt.setTimestamp(3, Timestamp.valueOf(LocalDateTime.of(2025, 7, 4, 18, 0))); stmt.setBoolean(4, true); stmt.setInt(5, 2);
-            stmt.addBatch();
-            stmt.executeBatch();
-        }
+        // Seed bank details for the new users
+        executeSql(conn, "INSERT INTO \"user_bank_details\" (user_id, bank_name, acc_no, acc_name) VALUES (1, 'HSBC', '300123456789', 'Maria Chen'), (2, 'Maybank', '112233445566', 'Henry Tan'), (3, 'CIMB', '778899001122', 'Eddie Ng');");
     }
 
     // Helper method to execute simple SQL statements
@@ -136,4 +156,74 @@ public class DataSeeder {
             stmt.executeUpdate();
         }
     }
+
+    /**
+     * MODIFIED: Added SHA-256 hashing method to match login logic.
+     */
+    private static String hashPassword(String password) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] hash = md.digest(password.getBytes());
+            BigInteger number = new BigInteger(1, hash);
+            StringBuilder hexString = new StringBuilder(number.toString(16));
+            while (hexString.length() < 64) {
+                hexString.insert(0, '0');
+            }
+            return hexString.toString();
+        } catch (Exception e) {
+            throw new RuntimeException("Error hashing password", e);
+        }
+    }
+
+    private static void seedBonuses(Connection conn) throws SQLException {
+        System.out.println("Seeding sample bonuses...");
+        String sql = "INSERT INTO public.bonuses (user_id, pay_period_start_date, name, type, amount, is_approved, approved_by_id) " +
+                "VALUES (?, ?, ?, CAST(? AS pay_item_type_enum), ?, ?, ?)";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            // Example: emp1 (user 3) gets a performance bonus for July, approved by the manager (user 1)
+            ps.setInt(1, 3);
+            ps.setDate(2, java.sql.Date.valueOf("2025-07-01"));
+            ps.setString(3, "Q2 High Performance Bonus");
+            ps.setString(4, "EARNING");
+            ps.setBigDecimal(5, new BigDecimal("1000.00"));
+            ps.setBoolean(6, true);
+            ps.setInt(7, 1); // Approved by 'mng'
+            ps.addBatch();
+
+            ps.executeBatch();
+        }
+    }
+
+    private static void seedAttendance(Connection conn) throws SQLException {
+        System.out.println("Seeding monthly attendance summaries...");
+        String sql = "INSERT INTO public.attendances (user_id, pay_period_start_date, days_worked, unpaid_leave_days, overtime_hours) VALUES (?, ?, ?, ?, ?)";
+
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            // Example: For July, emp1 (user 3) worked 21 days, took 1 unpaid day, and had 8 hours OT.
+            ps.setInt(1, 3);
+            ps.setDate(2, java.sql.Date.valueOf("2025-07-01"));
+            ps.setInt(3, 21); // The total days worked in the month
+            ps.setInt(4, 1);
+            ps.setBigDecimal(5, new BigDecimal("8.00"));
+
+            ps.addBatch();
+            ps.executeBatch();
+        }
+    }
+
+    private static void syncIdSequence(Connection conn, String tableName) throws SQLException {
+        String sql = String.format(
+                "SELECT setval(pg_get_serial_sequence('public.\"%s\"', 'id'), COALESCE((SELECT MAX(id) FROM public.\"%s\"), 1))",
+                tableName, tableName
+        );
+        System.out.println("✅ Syncing ID sequence for table: " + tableName);
+
+        // FIX: We must use executeQuery() for a SELECT statement, not executeUpdate().
+        // We won't use our general 'executeSql' helper here since it's a different type of command.
+        try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.executeQuery();
+        }
+    }
+
+
 }

@@ -1,17 +1,20 @@
 package com.wipro.payroll.common;
 
 import java.io.Serializable;
-import java.time.LocalDateTime;
+import java.math.BigDecimal;
+import java.time.LocalDate;
 
 public class Attendance implements Serializable {
     private static final long serialVersionUID = 1L;
 
     private int id;
     private int userId;
-    private LocalDateTime clockIn;
-    private LocalDateTime clockOut;
-    private boolean isApproved;
-    private int approvedById;
+    private LocalDate payPeriodStartDate;
+
+
+    private int daysWorked;
+    private int unpaidLeaveDays;
+    private BigDecimal overtimeHours;
 
     public Attendance() {}
 
@@ -19,12 +22,36 @@ public class Attendance implements Serializable {
     public void setId(int id) { this.id = id; }
     public int getUserId() { return userId; }
     public void setUserId(int userId) { this.userId = userId; }
-    public LocalDateTime getClockIn() { return clockIn; }
-    public void setClockIn(LocalDateTime clockIn) { this.clockIn = clockIn; }
-    public LocalDateTime getClockOut() { return clockOut; }
-    public void setClockOut(LocalDateTime clockOut) { this.clockOut = clockOut; }
-    public boolean isApproved() { return isApproved; }
-    public void setApproved(boolean approved) { isApproved = approved; }
-    public int getApprovedById() { return approvedById; }
-    public void setApprovedById(int approvedById) { this.approvedById = approvedById; }
+    public LocalDate getPayPeriodStartDate() {
+        return payPeriodStartDate;
+    }
+
+    public void setPayPeriodStartDate(LocalDate payPeriodStartDate) {
+        this.payPeriodStartDate = payPeriodStartDate;
+    }
+
+    public int getDaysWorked() {
+        return daysWorked;
+    }
+
+    public void setDaysWorked(int daysWorked) {
+        this.daysWorked = daysWorked;
+    }
+
+    public int getUnpaidLeaveDays() {
+        return unpaidLeaveDays;
+    }
+
+    public void setUnpaidLeaveDays(int unpaidLeaveDays) {
+        this.unpaidLeaveDays = unpaidLeaveDays;
+    }
+
+    public BigDecimal getOvertimeHours() {
+        return overtimeHours;
+    }
+
+    public void setOvertimeHours(BigDecimal overtimeHours) {
+        this.overtimeHours = overtimeHours;
+    }
+
 }

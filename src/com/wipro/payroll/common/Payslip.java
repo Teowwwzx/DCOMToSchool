@@ -12,17 +12,11 @@ public class Payslip implements Serializable {
 
     private int id;
     private int userId;
-    private LocalDate payPeriodStartDate; // Using LocalDate for dates without time
+    private LocalDate payPeriodStartDate;
     private LocalDate payPeriodEndDate;
     private String remark;
     private LocalDateTime createdAt;
-
-    // A payslip object should contain its list of line items.
-    // This makes it a complete, self-contained object to send to the client.
     private List<PayItem> payItems = new ArrayList<>();
-
-    // We can also include calculated fields that don't exist in the DB
-    // These are calculated by the server before sending to the client.
     private BigDecimal grossEarnings;
     private BigDecimal totalDeductions;
     private BigDecimal netPay;

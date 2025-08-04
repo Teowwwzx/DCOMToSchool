@@ -17,16 +17,18 @@ public class Client {
 
     public static void main(String[] args) {
         try {
-            // 1. Connect to the RMI Service once at the start
             Registry registry = LocateRegistry.getRegistry("localhost", 1099);
             payrollService = (PayrollService) registry.lookup("PayrollService");
             System.out.println("✅ Successfully connected to the Payroll RMI Service.");
 
-            // 2. Start the main application loop
             while (true) {
-                showMainMenu();
+                if (loggedInUser == null) {
+                    showMainMenu();
+                } else {
+                    // If user is logged in, route them (handles returning from a sub-menu)
+                    routeUserBasedOnRole();
+                }
             }
-
         } catch (Exception e) {
             System.err.println("❌ FATAL: Could not connect to the RMI Server. Please ensure it is running.");
         }
@@ -52,9 +54,6 @@ public class Client {
         }
     }
 
-    /**
-     * Handles the user login process.
-     */
     private static void handleLogin() {
         try {
             System.out.println("\n--- System Login ---");
@@ -66,8 +65,7 @@ public class Client {
             loggedInUser = payrollService.login(username, password);
 
             if (loggedInUser != null) {
-                System.out.println("\n✅ Login successful! Welcome, " + loggedInUser.getFirstName() + ".");
-                // Direct user to the appropriate menu based on their role
+                System.out.println("\n✅ Login successful! Welcome, " + loggedInUser.getFName() + ". Your role is: " + loggedInUser.getRole());
                 routeUserBasedOnRole();
             } else {
                 System.out.println("❌ Login failed. Invalid username or password.");
@@ -77,96 +75,135 @@ public class Client {
         }
     }
 
-    /**
-     * Checks the logged-in user's roles and directs them to the correct menu.
-     */
     private static void routeUserBasedOnRole() {
-        if (hasRole(loggedInUser, "HR")) {
+        if (loggedInUser == null) return; // Should not happen, but a good safeguard
+
+        if (hasRole("HR")) {
             showHrMenu();
-        } else if (hasRole(loggedInUser, "MANAGER")) {
+        } else if (hasRole("MANAGER")) {
             showManagerMenu();
-        } else if (hasRole(loggedInUser, "EMPLOYEE")) {
+        } else if (hasRole("EMPLOYEE")) {
             showEmployeeMenu(false);
         } else {
-            System.out.println("You do not have a role assigned. Please contact an administrator.");
+            System.out.println("Your assigned role is not recognized. Please contact an administrator.");
             handleLogout();
         }
     }
 
-    // =================================================================
+
+
+// =================================================================
     //  ROLE-SPECIFIC MENUS
     // =================================================================
 
-    /**
-     * Displays the menu for users with the EMPLOYEE role.
-     */
     private static void showEmployeeMenu(boolean isSwitchedView) {
-        while (loggedInUser != null) {
+        while (loggedInUser != null && hasRole("EMPLOYEE")) {
             System.out.println("\n--- Employee Portal ---");
-            System.out.println("1. View My Latest Payslip");
-            System.out.println("2. Update My Bank Details");
+            System.out.println("1. View My Profile");
+            System.out.println("2. View My Latest Payslip");
+            System.out.println("3. Update My Bank Details");
+
             if (isSwitchedView) {
-                System.out.println("9. Return to HR Menu");
+                System.out.println("9. Return to Previous Menu");
             } else {
                 System.out.println("9. Logout");
             }
             System.out.print("Choose an option: ");
-
             String choice = scanner.nextLine();
+
             switch (choice) {
                 case "1":
-                    handleViewMyPayslip();
+                    handleViewMyProfile();
                     break;
                 case "2":
+                    handleViewMyLatestPayslip();
+                    break;
+                case "3":
                     handleUpdateBankDetails();
                     break;
                 case "9":
-                    if (isSwitchedView) {
-                        System.out.println("Returning to HR menu...");
-                        return; // FIX: Just return to the calling menu (showHrMenu)
-                    } else {
-                        handleLogout(); // Perform a full logout
-                        return;
-                    }
+                    if (isSwitchedView) return; // Return to the calling menu (HR or Manager)
+                    else handleLogout();
+                    break;
                 default:
                     System.out.println("Invalid option.");
             }
         }
     }
 
-    /**
-     * Displays the menu for users with the HR role.
-     */
     private static void showHrMenu() {
-        while (loggedInUser != null) {
+        while (loggedInUser != null && hasRole("HR")) {
             System.out.println("\n--- HR Administrator Portal ---");
-            System.out.println("1. Run Monthly Payroll for All Employees");
-            System.out.println("2. List All Users");
-            System.out.println("3. Register New User");
-            System.out.println("4. Manage Compensation Templates"); // <-- NEW OPTION
-            System.out.println("9. Switch to Employee View");
-            System.out.println("0. Logout");
-            System.out.print("Choose an option: ");
+            System.out.println("1. Create New Employee");
+            System.out.println("2. View All Employees");
+            System.out.println("3. Edit Employee Details");
+            System.out.println("4. Manage Compensation Rules");
+            System.out.println("5. Run Payroll Cycle");
+            System.out.println("6. View Employee Payslip");
+            System.out.println("7. List All Generated Payslips");
 
+            System.out.println("8. Switch to My Employee View");
+            System.out.println("9. Logout");
+            System.out.print("Choose an option: ");
             String choice = scanner.nextLine();
+
             switch (choice) {
                 case "1":
-                    handleRunPayroll();
+                    handleCreateUser();
                     break;
                 case "2":
-                    handleListAllUsers();
+                    handleReadAllUsers();
                     break;
                 case "3":
-                    handleHrRegisterUser();
+                    handleEditUser();
                     break;
                 case "4":
                     handleManageCompensation();
-                case "9":
-                    showEmployeeMenu(true); // Pass true to show "Return to HR Menu"
                     break;
-                case "0":
+                case "5":
+                    handleRunPayroll();
+                    break;
+                case "6":
+                    handleViewEmployeePayslip();
+                    break;
+                case "7":
+                    handleListAllPayslips();
+                    break;
+                case "8":
+                    System.out.println("Switching to Employee View...");
+                    showEmployeeMenu(true); // 'true' means it will show "Return to Previous Menu"
+                    break;
+                case "9":
                     handleLogout();
-                    return;
+                    break;
+                default:
+                    System.out.println("Invalid option.");
+            }
+        }
+    }
+
+    private static void showManagerMenu() {
+        while (loggedInUser != null && hasRole("MANAGER")) {
+            System.out.println("\n--- Manager Portal ---");
+            System.out.println("1. View My Department Report");
+            System.out.println("2. Approve Timesheets / Bonuses");
+            System.out.println("8. Switch to My Employee View");
+            System.out.println("9. Logout");
+            System.out.print("Choose an option: ");
+            String choice = scanner.nextLine();
+
+            switch (choice) {
+                case "1":
+                case "2":
+                    System.out.println("[Feature Not Implemented Yet]");
+                    break;
+                case "8":
+                    System.out.println("Switching to Employee View...");
+                    showEmployeeMenu(true);
+                    break;
+                case "9":
+                    handleLogout();
+                    break;
                 default:
                     System.out.println("Invalid option.");
             }
@@ -174,65 +211,17 @@ public class Client {
     }
 
 
-    private static void handleHrRegisterUser() {
-        try {
-            System.out.println("\n--- HR: Register New User ---");
-            User newUser = new User();
-
-            System.out.print("Enter First Name: ");
-            newUser.setFirstName(scanner.nextLine());
-            System.out.print("Enter Last Name: ");
-            newUser.setLastName(scanner.nextLine());
-            System.out.print("Enter Username: ");
-            newUser.setUsername(scanner.nextLine());
-            System.out.print("Enter Email: ");
-            newUser.setEmail(scanner.nextLine());
-            System.out.print("Enter IC/Passport Number: ");
-            newUser.setIc(scanner.nextLine());
-            System.out.print("Enter Phone Number: ");
-            newUser.setPhoneNumber(scanner.nextLine());
-            System.out.print("Enter Department ID (e.g., 1=General, 2=Logistics): ");
-            newUser.setDepartmentId(Integer.parseInt(scanner.nextLine()));
-
-            System.out.print("Enter a temporary password for the user: ");
-            String password = scanner.nextLine();
-
-            // Call the RMI method to register the user
-            // Note: Our current registerUser RMI method is simple. A real one might take a User object.
-            // For now, we will adapt to the existing RMI method.
-            // To make this work, we need to update the PayrollService to accept a User object.
-            // Let's assume we update it for a better design.
-            String response = payrollService.registerUser(newUser, password);
-            System.out.println("\n✅ Server Response: " + response);
-
-        } catch (NumberFormatException e) {
-            System.err.println("❌ Invalid Department ID. Please enter a number.");
-        } catch (Exception e) {
-            System.err.println("❌ An error occurred during registration: " + e.getMessage());
-        }
-    }
-
-
-    /**
-     * Displays the menu for users with the MANAGER role.
-     */
-    private static void showManagerMenu() {
-        System.out.println("\n[Manager Portal: Feature Not Implemented Yet]");
-        System.out.println("This is where you would call RMI methods to show reports for your department.");
-        handleLogout(); // For now, just log out.
-    }
-
     // =================================================================
-    //  FEATURE HANDLERS
+    //  FEATURE HANDLERS & HELPERS
     // =================================================================
 
-    private static void handleViewMyPayslip() {
+    private static void handleViewMyLatestPayslip() {
         try {
             System.out.println("\nFetching your latest payslip...");
             Payslip payslip = payrollService.getMyLatestPayslip(loggedInUser.getId());
 
             if (payslip != null) {
-                printPayslip(payslip);
+                printPayslip(payslip); // Use a helper to format the output
             } else {
                 System.out.println("No payslips found for your account.");
             }
@@ -243,52 +232,38 @@ public class Client {
 
     private static void handleUpdateBankDetails() {
         try {
-            System.out.println("\n--- My Bank Details ---");
+            // 1. Show current details
+            System.out.println("\n--- Update My Bank Details ---");
             UserBankDetails currentDetails = payrollService.getMyBankDetails(loggedInUser.getId());
-
             if (currentDetails != null) {
                 System.out.println("Current Bank Name: " + currentDetails.getBankName());
                 System.out.println("Current Account No: " + currentDetails.getAccountNumber());
-                System.out.println("Current Account Name: " + currentDetails.getAccountHolderName());
             } else {
                 System.out.println("You have no bank details on file.");
             }
 
-            // 2. Ask the user if they want to update
-            System.out.print("\nDo you want to add or update your details? (y/n): ");
-            String choice = scanner.nextLine();
+            // 2. Prompt for new details
+            System.out.println("\nPlease enter your new details:");
+            System.out.print("Enter Bank Name: ");
+            String bankName = scanner.nextLine();
+            System.out.print("Enter Account Number (digits only): ");
+            String accNo = scanner.nextLine();
+            System.out.print("Enter Account Holder Name (as per bank records): ");
+            String accName = scanner.nextLine();
 
-            if (!choice.equalsIgnoreCase("y")) {
-                System.out.println("Update cancelled.");
+            if(bankName.isBlank() || accNo.isBlank() || accName.isBlank()) {
+                System.out.println("All fields are required. Update cancelled.");
                 return;
             }
 
-            System.out.println("\n--- Enter New Bank Details ---");
-            System.out.print("Enter Bank Name (e.g., Maybank): ");
-            String bankName = scanner.nextLine();
-            System.out.print("Enter Account Number: ");
-            String accNo;
-            while (true) {
-                System.out.print("Enter Account Number (digits only): ");
-                accNo = scanner.nextLine();
-                // Use a simple regular expression to check if it's all digits and within a length range
-                if (accNo.matches("\\d{8,16}")) { // This means "8 to 16 digits"
-                    break; // Valid format, exit the loop
-                } else {
-                    System.out.println("❌ Invalid format. Please enter 8 to 16 digits with no spaces or symbols.");
-                }
-            }
+            // 3. Send update to server
+            UserBankDetails newDetails = new UserBankDetails();
+            newDetails.setUserId(loggedInUser.getId());
+            newDetails.setBankName(bankName);
+            newDetails.setAccountNumber(accNo);
+            newDetails.setAccountHolderName(accName);
 
-            System.out.print("Enter Account Holder Name: ");
-            String accName = scanner.nextLine();
-
-            UserBankDetails details = new UserBankDetails();
-            details.setUserId(loggedInUser.getId());
-            details.setBankName(bankName);
-            details.setAccountNumber(accNo);
-            details.setAccountHolderName(accName);
-
-            boolean success = payrollService.updateMyBankDetails(loggedInUser.getId(), details);
+            boolean success = payrollService.updateMyBankDetails(loggedInUser.getId(), newDetails);
             if (success) {
                 System.out.println("✅ Bank details updated successfully.");
             } else {
@@ -299,77 +274,12 @@ public class Client {
         }
     }
 
-    private static void handleRunPayroll() {
-        try {
-            System.out.println("\nAre you sure you want to run the monthly payroll for all employees? This cannot be undone.");
-            System.out.print("Type 'YES' to confirm: ");
-            String confirmation = scanner.nextLine();
-            if (confirmation.equals("YES")) {
-                System.out.println("Processing... please wait.");
-                String result = payrollService.runMonthlyPayroll(loggedInUser.getId());
-                System.out.println("\n✅ Server Response: " + result);
-            } else {
-                System.out.println("Payroll run cancelled.");
-            }
-        } catch(SecurityException se) {
-            System.err.println("❌ SECURITY ERROR: You do not have permission to perform this action.");
-        } catch (RemoteException e) {
-            System.err.println("❌ Error running payroll: " + e.getMessage());
-        }
-    }
-
-    private static void handleListAllUsers() {
-        try {
-            System.out.println("\nFetching all users...");
-            List<User> users = payrollService.getAllUsers(loggedInUser.getId());
-            System.out.println("------------------------------------------------------------------");
-            System.out.printf("%-5s | %-15s | %-20s | %-25s%n", "ID", "Username", "Full Name", "Email");
-            System.out.println("------------------------------------------------------------------");
-            for (User user : users) {
-                System.out.printf("%-5d | %-15s | %-20s | %-25s%n",
-                        user.getId(),
-                        user.getUsername(),
-                        user.getFirstName() + " " + user.getLastName(),
-                        user.getEmail());
-            }
-            System.out.println("------------------------------------------------------------------");
-
-        } catch(SecurityException se) {
-            System.err.println("❌ SECURITY ERROR: You do not have permission to perform this action.");
-        } catch (RemoteException e) {
-            System.err.println("❌ Error fetching users: " + e.getMessage());
-        }
-    }
-
-    private static void handleLogout() {
-        System.out.println("Logging out user: " + loggedInUser.getUsername());
-        loggedInUser = null;
-    }
-
-    // =================================================================
-    //  UTILITY HELPERS
-    // =================================================================
-
-    /**
-     * Checks if the logged-in user has a specific role.
-     */
-    private static boolean hasRole(User user, String roleName) {
-        for (Role role : user.getRoles()) {
-            if (role.getName().equalsIgnoreCase(roleName)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * Prints a payslip to the console in a nicely formatted way.
-     */
+    // Add this helper method to format the payslip nicely
     private static void printPayslip(Payslip payslip) {
         System.out.println("\n==================================================");
-        System.out.println("          EARNINGS STATEMENT / PAYSLIP          ");
+        System.out.println("                  EARNINGS STATEMENT                ");
         System.out.println("==================================================");
-        System.out.println(" Employee: " + loggedInUser.getFirstName() + " " + loggedInUser.getLastName());
+        System.out.println(" Employee: " + loggedInUser.getFName() + " " + loggedInUser.getLName());
         System.out.println(" Pay Period: " + payslip.getPayPeriodStartDate() + " to " + payslip.getPayPeriodEndDate());
         System.out.println("--------------------------------------------------");
         System.out.printf("%-30s %15s%n", "DESCRIPTION", "AMOUNT (RM)");
@@ -396,69 +306,407 @@ public class Client {
         System.out.println("==================================================");
     }
 
-    // Add this new helper method to Client.java
-
-    private static void handleManageCompensation() {
-        if (!hasRole(loggedInUser, "HR")) {
-            System.out.println("❌ You do not have permission to perform this action.");
-            return;
-        }
-
+    private static void handleViewMyProfile() {
         try {
-            System.out.println("\n--- Manage Compensation Templates ---");
-            // Step 1: Display all job titles
-            List<JobTitle> jobTitles = payrollService.getAllJobTitles(loggedInUser.getId());
-            if (jobTitles.isEmpty()) {
-                System.out.println("No job titles found.");
-                return;
-            }
-            System.out.println("Available Job Titles:");
-            for (JobTitle job : jobTitles) {
-                System.out.printf("  ID: %d, Title: %s %s (Dept ID: %d)\n",
-                        job.getId(), job.getLevel(), job.getTitle(), job.getDeptId());
-            }
+            System.out.println("\nFetching your profile...");
+            UserProfile profile = payrollService.getMyProfile(loggedInUser.getId());
 
-            // Step 2: Ask HR to select a job title
-            System.out.print("\nEnter the ID of the job title to view/edit: ");
-            int jobTitleId = Integer.parseInt(scanner.nextLine());
+            if (profile != null) {
+                System.out.println("\n================ MY PROFILE ================");
+                System.out.println("Name: " + profile.getFirstName() + " " + profile.getLastName());
+                System.out.println("Username: " + profile.getUsername());
+                System.out.println("Email: " + profile.getEmail());
+                System.out.println("Phone: " + profile.getPhone());
+                System.out.println("------------------------------------------");
+                System.out.println("Department: " + profile.getDepartmentName());
+                System.out.println("Job Title: " + profile.getJobTitle());
+                System.out.println("Employment: " + profile.getEmploymentType());
+                System.out.println("------------------------------------------");
 
-            // Step 3: Fetch and display the compensation components for that title
-            List<PayTemplate> templates = payrollService.getPayTemplatesForJobTitle(loggedInUser.getId(), jobTitleId);
-            if (templates.isEmpty()) {
-                System.out.println("No compensation template found for this job title.");
-                return;
-            }
+                UserBankDetails bank = profile.getBankDetails();
+                if (bank != null) {
+                    System.out.println("Bank Name: " + bank.getBankName());
+                    System.out.println("Account No: " + bank.getAccountNumber());
+                } else {
+                    System.out.println("Bank Details: Not set.");
+                }
 
-            System.out.println("\nCurrent Compensation Package:");
-            for (PayTemplate item : templates) {
-                System.out.printf("  Item ID: %d, Description: %s, Type: %s, Amount: RM %.2f\n",
-                        item.getId(), item.getDescription(), item.getType(), item.getAmount());
-            }
-
-            // Step 4: Ask if they want to edit
-            System.out.print("\nDo you want to edit an item? (y/n): ");
-            if (!scanner.nextLine().equalsIgnoreCase("y")) {
-                return;
-            }
-
-            System.out.print("Enter the Item ID to update: ");
-            int templateItemId = Integer.parseInt(scanner.nextLine());
-
-            System.out.print("Enter the new Amount (e.g., 8500.00): ");
-            BigDecimal newAmount = new BigDecimal(scanner.nextLine());
-
-            // Step 5: Call the RMI method to perform the update
-            boolean success = payrollService.updatePayTemplateItem(loggedInUser.getId(), templateItemId, newAmount);
-            if (success) {
-                System.out.println("✅ Successfully updated the compensation template.");
+                System.out.println("==========================================");
             } else {
-                System.out.println("❌ Failed to update the item. Please check the ID.");
+                System.out.println("Could not retrieve your profile.");
+            }
+        } catch (RemoteException e) {
+            System.err.println("❌ Error fetching profile: " + e.getMessage());
+        }
+    }
+
+    // HR Functions
+    private static void handleCreateUser() {
+        try {
+            System.out.println("\n--- Create New Employee ---");
+
+            // --- Step 1: Fetch and display lists for user-friendly selection ---
+            System.out.println("Loading available job titles...");
+            List<JobTitle> jobTitles = payrollService.getAllJobTitles(loggedInUser.getId());
+            for (JobTitle job : jobTitles) {
+                System.out.printf("  ID: %d, Title: %s (%s)\n", job.getId(), job.getTitle(), job.getLevel());
+            }
+
+            System.out.println("\nLoading available employment types...");
+            List<EmpType> empTypes = payrollService.getAllEmpTypes(loggedInUser.getId());
+            for (EmpType type : empTypes) {
+                System.out.printf("  ID: %d, Type: %s\n", type.getId(), type.getName());
+            }
+
+            User newUser = new User();
+            System.out.println("Please provide the following details for the new employee:");
+
+            System.out.print("First Name: ");
+            newUser.setFName(scanner.nextLine());
+            System.out.print("Last Name: ");
+            newUser.setLName(scanner.nextLine());
+            System.out.print("Username: ");
+            newUser.setUsername(scanner.nextLine());
+            System.out.print("Email: ");
+            newUser.setEmail(scanner.nextLine());
+            System.out.print("Phone Number: ");
+            newUser.setPhone(scanner.nextLine());
+            System.out.print("IC / Passport Number: ");
+            newUser.setIc(scanner.nextLine());
+            System.out.print("Job Title ID (press Enter to skip): ");
+
+            String jobTitleIdStr = scanner.nextLine();
+            if (!jobTitleIdStr.isBlank()) {
+                newUser.setJobTitleId(Integer.parseInt(jobTitleIdStr));
+            }
+
+            System.out.print("Employment Type ID (press Enter to skip): ");
+            String empTypeIdStr = scanner.nextLine();
+            if (!empTypeIdStr.isBlank()) {
+                newUser.setEmpTypeId(Integer.parseInt(empTypeIdStr));
+            }
+            System.out.print("Temporary Password: ");
+            String tempPassword = scanner.nextLine();
+
+            // Call the RMI method, passing the logged-in HR admin's ID for the security check
+            String response = payrollService.createUser(loggedInUser.getId(), newUser, tempPassword);
+            System.out.println("\n✅ Server Response: " + response);
+
+        } catch (NumberFormatException e) {
+            System.err.println("❌ Invalid ID. Please enter a number for Job Title and Employment Type.");
+        } catch (SecurityException se) {
+            System.err.println("❌ SECURITY ERROR: " + se.getMessage());
+        } catch (RemoteException e) {
+            System.err.println("❌ An error occurred while creating the user: " + e.getMessage());
+        }
+    }
+
+    private static void handleReadAllUsers() {
+        try {
+            System.out.println("\nFetching all employee records...");
+            List<User> users = payrollService.readAllUsers(loggedInUser.getId());
+
+            if (users == null || users.isEmpty()) {
+                System.out.println("No users found in the system.");
+                return;
+            }
+
+            // Print a formatted table header
+            System.out.println("-------------------------------------------------------------------------------------------------------------");
+            System.out.printf("| %-4s | %-15s | %-20s | %-25s | %-25s |%n", "ID", "Username", "Full Name", "Job Title", "Department");
+            System.out.println("-------------------------------------------------------------------------------------------------------------");
+
+            // Print each user's details
+            for (User user : users) {
+                System.out.printf("| %-4d | %-15s | %-20s | %-25s | %-25s |%n",
+                        user.getId(),
+                        user.getUsername(),
+                        user.getFName() + " " + user.getLName(),
+                        user.getJobTitle(),
+                        user.getDepartmentName());
+            }
+            System.out.println("-------------------------------------------------------------------------------------------------------------");
+            System.out.println(users.size() + " user(s) found.");
+
+        } catch (SecurityException se) {
+            System.err.println("❌ SECURITY ERROR: " + se.getMessage());
+        } catch (RemoteException e) {
+            System.err.println("❌ An error occurred while fetching users: " + e.getMessage());
+        }
+    }
+
+    private static void handleEditUser() {
+        try {
+            System.out.println("\n--- Edit Employee Details ---");
+            System.out.print("Enter the ID of the user you wish to edit: ");
+            int targetUserId = Integer.parseInt(scanner.nextLine());
+
+            // 1. Fetch the user's current details from the server
+            User userToEdit = payrollService.readUserById(loggedInUser.getId(), targetUserId);
+            if (userToEdit == null) {
+                System.out.println("❌ Error: User with ID " + targetUserId + " not found.");
+                return;
+            }
+
+            // 2. Display current details and prompt for new ones.
+            // The user can press Enter to keep the current value.
+            System.out.println("\nEnter new details. Press Enter to keep the current value.");
+
+            System.out.printf("First Name [%s]: ", userToEdit.getFName());
+            String newFName = scanner.nextLine();
+            if (!newFName.isBlank()) userToEdit.setFName(newFName);
+
+            System.out.printf("Last Name [%s]: ", userToEdit.getLName());
+            String newLName = scanner.nextLine();
+            if (!newLName.isBlank()) userToEdit.setLName(newLName);
+
+            System.out.printf("Email [%s]: ", userToEdit.getEmail());
+            String newEmail = scanner.nextLine();
+            if (!newEmail.isBlank()) userToEdit.setEmail(newEmail);
+
+            System.out.printf("Phone [%s]: ", userToEdit.getPhone());
+            String newPhone = scanner.nextLine();
+            if (!newPhone.isBlank()) userToEdit.setPhone(newPhone);
+
+            System.out.printf("IC/Passport [%s]: ", userToEdit.getIc());
+            String newIc = scanner.nextLine();
+            if (!newIc.isBlank()) userToEdit.setIc(newIc);
+
+            // --- Handle Job Title and Emp Type with lists ---
+            System.out.println("\n--- Assign Job Title ---");
+            System.out.printf("Current Job Title: %d - %s\n", userToEdit.getJobTitleId(), userToEdit.getJobTitle());
+            List<JobTitle> jobTitles = payrollService.getAllJobTitles(loggedInUser.getId());
+            jobTitles.forEach(job -> System.out.printf("  ID: %d, Title: %s (%s)\n", job.getId(), job.getTitle(), job.getLevel()));
+            System.out.print("Enter new Job Title ID (press Enter to keep current): ");
+            String newJobIdStr = scanner.nextLine();
+            if (!newJobIdStr.isBlank()) userToEdit.setJobTitleId(Integer.parseInt(newJobIdStr));
+
+            System.out.println("\n--- Assign Employment Type ---");
+            System.out.printf("Current Employment Type ID: %d\n", userToEdit.getEmpTypeId());
+            List<EmpType> empTypes = payrollService.getAllEmpTypes(loggedInUser.getId());
+            empTypes.forEach(type -> System.out.printf("  ID: %d, Type: %s\n", type.getId(), type.getName()));
+            System.out.print("Enter new Employment Type ID (press Enter to keep current): ");
+            String newEmpTypeIdStr = scanner.nextLine();
+            if (!newEmpTypeIdStr.isBlank()) userToEdit.setEmpTypeId(Integer.parseInt(newEmpTypeIdStr));
+
+            // 3. Call the update method on the server
+            boolean success = payrollService.updateUser(loggedInUser.getId(), userToEdit);
+
+            // 4. Display the result
+            if (success) {
+                System.out.println("\n✅ User details for '" + userToEdit.getUsername() + "' updated successfully.");
+            } else {
+                System.out.println("\n❌ Failed to update user details.");
             }
 
         } catch (NumberFormatException e) {
-            System.err.println("❌ Invalid input. Please enter a number.");
+            System.err.println("❌ Invalid ID. Please enter a number.");
+        } catch (RemoteException e) {
+            System.err.println("❌ An error occurred during the update process: " + e.getMessage());
+        }
+    }
+
+    private static void handleManageCompensation() {
+        try {
+            System.out.println("\n--- Manage Compensation Rules ---");
+            System.out.println("Loading available job titles...");
+            List<JobTitle> jobTitles = payrollService.getAllJobTitles(loggedInUser.getId());
+            jobTitles.forEach(job -> System.out.printf("  ID: %d, Title: %s (%s)\n", job.getId(), job.getTitle(), job.getLevel()));
+
+            System.out.print("\nEnter the ID of the job title to manage: ");
+            int jobTitleId = Integer.parseInt(scanner.nextLine());
+
+            // This loop allows the user to perform multiple actions on one package
+            while (true) {
+                List<PayTemplate> templates = payrollService.getPayTemplatesForJobTitle(loggedInUser.getId(), jobTitleId);
+                System.out.println("\nCurrent Compensation Package for Job ID " + jobTitleId + ":");
+                templates.forEach(item -> System.out.printf("  Item ID: %-4d | Type: %-10s | Desc: %-25s | Amount: RM %.2f\n",
+                        item.getId(), item.getType(), item.getDescription(), item.getAmount()));
+
+                System.out.println("\nWhat would you like to do?");
+                System.out.println("1. Update an existing item's amount");
+                System.out.println("2. Add a new item to this package");
+                System.out.println("3. Delete an item from this package");
+                System.out.println("9. Return to HR Menu");
+                System.out.print("Choose an option: ");
+                String choice = scanner.nextLine();
+
+                try {
+                    switch (choice) {
+                        case "1": // UPDATE
+                            System.out.print("Enter the Item ID to update: ");
+                            int updateId = Integer.parseInt(scanner.nextLine());
+                            System.out.print("Enter the new Amount (e.g., 650.00): ");
+                            BigDecimal newAmount = new BigDecimal(scanner.nextLine());
+                            if (payrollService.updatePayTemplateItem(loggedInUser.getId(), updateId, newAmount)) {
+                                System.out.println("✅ Item updated successfully.");
+                            } else { System.out.println("❌ Update failed. Check ID."); }
+                            break;
+                        case "2": // ADD (CREATE)
+                            System.out.println("\n--- Add New Compensation Item ---");
+                            PayTemplate newItem = new PayTemplate();
+                            newItem.setJobTitleId(jobTitleId); // Link to the current job title
+                            System.out.print("Description (e.g., Car Allowance): ");
+                            newItem.setDescription(scanner.nextLine());
+                            System.out.print("Type (EARNING or DEDUCTION): ");
+                            newItem.setType(PayItemType.valueOf(scanner.nextLine().toUpperCase()));
+                            System.out.print("Amount (e.g., 400.00): ");
+                            newItem.setAmount(new BigDecimal(scanner.nextLine()));
+                            if (payrollService.addPayTemplateItem(loggedInUser.getId(), newItem) != null) {
+                                System.out.println("✅ New item added successfully.");
+                            } else { System.out.println("❌ Failed to add item."); }
+                            break;
+                        case "3": // DELETE
+                            System.out.print("Enter the Item ID to delete: ");
+                            int deleteId = Integer.parseInt(scanner.nextLine());
+                            if (payrollService.deletePayTemplateItem(loggedInUser.getId(), deleteId)) {
+                                System.out.println("✅ Item deleted successfully.");
+                            } else { System.out.println("❌ Delete failed. Check ID."); }
+                            break;
+                        case "9":
+                            return; // Exit the loop and return to the HR Menu
+                        default:
+                            System.out.println("Invalid option.");
+                    }
+                } catch (NumberFormatException e) {
+                    // This catch block prevents the crash!
+                    System.err.println("❌ Invalid input. Please enter a valid number for IDs and amounts.");
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("❌ An error occurred: " + e.getMessage());
+        }
+    }
+
+    private static void handleRunPayroll() {
+        try {
+            System.out.println("\n--- Run Monthly Payroll ---");
+            System.out.print("Enter the Year for the payroll run (e.g., 2025): ");
+            int year = Integer.parseInt(scanner.nextLine());
+            System.out.print("Enter the Month for the payroll run (1-12): ");
+            int month = Integer.parseInt(scanner.nextLine());
+
+            // Add a strong confirmation warning
+            System.out.println("\nWARNING: You are about to run the payroll for " + year + "-" + month + ".");
+            System.out.println("This will generate payslips for all active employees and cannot be easily undone.");
+            System.out.print("Type 'YES' to confirm and proceed: ");
+            String confirmation = scanner.nextLine();
+
+            if (confirmation.equals("YES")) {
+                System.out.println("Processing... please wait. This may take a moment.");
+                String result = payrollService.runMonthlyPayroll(loggedInUser.getId(), year, month);
+                System.out.println("\n✅ Server Response: " + result);
+            } else {
+                System.out.println("Payroll run cancelled.");
+            }
+        } catch (NumberFormatException e) {
+            System.err.println("❌ Invalid year or month. Please enter numbers only.");
+        } catch (RemoteException e) {
+            System.err.println("❌ An error occurred while running payroll: " + e.getMessage());
+        }
+    }
+
+    private static void handleViewEmployeePayslip() {
+        try {
+            System.out.println("\n--- View Employee Payslip ---");
+            System.out.print("Enter the User ID of the employee: ");
+            int targetUserId = Integer.parseInt(scanner.nextLine());
+            System.out.print("Enter the Year of the payslip (e.g., 2025): ");
+            int year = Integer.parseInt(scanner.nextLine());
+            System.out.print("Enter the Month of the payslip (1-12): ");
+            int month = Integer.parseInt(scanner.nextLine());
+
+            System.out.printf("Fetching payslip for user ID %d for %d-%02d...\n", targetUserId, year, month);
+
+            Payslip payslip = payrollService.getPayslipForUser(loggedInUser.getId(), targetUserId, year, month);
+
+            if (payslip != null) {
+                User targetUser = payrollService.readUserById(loggedInUser.getId(), targetUserId);
+                if (targetUser != null) {
+                    printPayslip(payslip, targetUser);
+                } else {
+                    System.out.println("Could not find user details for ID " + targetUserId);
+                }
+            } else {
+                System.out.println("No payslip found for that user for the specified period.");
+            }
+        } catch (NumberFormatException e) {
+            System.err.println("❌ Invalid input. Please enter numbers only.");
         } catch (RemoteException e) {
             System.err.println("❌ An error occurred: " + e.getMessage());
         }
+    }
+
+    private static void printPayslip(Payslip payslip, User user) {
+        System.out.println("\n==================================================");
+        System.out.println("                  EARNINGS STATEMENT                ");
+        System.out.println("==================================================");
+        System.out.println(" Employee: " + user.getFName() + " " + user.getLName() + " (ID: " + user.getId() + ")");
+        System.out.println(" Pay Period: " + payslip.getPayPeriodStartDate() + " to " + payslip.getPayPeriodEndDate());
+        System.out.println("--------------------------------------------------");
+        System.out.printf("%-30s %15s%n", "DESCRIPTION", "AMOUNT (RM)");
+        System.out.println("--------------------------------------------------");
+
+        System.out.println("\n  EARNINGS:");
+        for (PayItem item : payslip.getPayItems()) {
+            if (item.getType() == PayItemType.EARNING) {
+                System.out.printf("  %-28s %15.2f%n", item.getName(), item.getAmount());
+            }
+        }
+        System.out.printf("\n  %-28s %15.2f%n", "GROSS PAY:", payslip.getGrossEarnings());
+
+        System.out.println("\n  DEDUCTIONS:");
+        for (PayItem item : payslip.getPayItems()) {
+            if (item.getType() == PayItemType.DEDUCTION) {
+                System.out.printf("  %-28s %15.2f%n", item.getName(), item.getAmount());
+            }
+        }
+        System.out.printf("\n  %-28s %15.2f%n", "TOTAL DEDUCTIONS:", payslip.getTotalDeductions());
+
+        System.out.println("==================================================");
+        System.out.printf("  %-28s %15.2f%n", "NET PAY:", payslip.getNetPay());
+        System.out.println("==================================================");
+    }
+
+    private static void handleListAllPayslips() {
+        try {
+            System.out.println("\nFetching all generated payslips...");
+            List<PayslipSummary> summaries = payrollService.getAllPayslips(loggedInUser.getId());
+
+            if (summaries.isEmpty()) {
+                System.out.println("No payslips have been generated yet.");
+                return;
+            }
+
+            System.out.println("-------------------------------------------------------------------------------");
+            System.out.printf("| %-10s | %-8s | %-20s | %-12s | %-15s |%n", "Payslip ID", "User ID", "Employee Name", "Pay Period", "Net Pay (RM)");
+            System.out.println("-------------------------------------------------------------------------------");
+
+            for (PayslipSummary summary : summaries) {
+                System.out.printf("| %-10d | %-8d | %-20s | %-12s | %15.2f |%n",
+                        summary.getPayslipId(),
+                        summary.getUserId(),
+                        summary.getUserFullName(),
+                        summary.getPayPeriodStartDate().toString().substring(0, 7), // Show YYYY-MM
+                        summary.getNetPay());
+            }
+            System.out.println("-------------------------------------------------------------------------------");
+
+        } catch (RemoteException e) {
+            System.err.println("❌ An error occurred: " + e.getMessage());
+        }
+    }
+
+
+    private static void handleLogout() {
+        System.out.println("Logging out user: " + loggedInUser.getUsername());
+        loggedInUser = null; // This will cause the main loop to go back to showMainMenu()
+    }
+
+    private static boolean hasRole(String roleName) {
+        if (loggedInUser == null || loggedInUser.getRole() == null) {
+            return false;
+        }
+        return loggedInUser.getRole().name().equalsIgnoreCase(roleName);
     }
 }
