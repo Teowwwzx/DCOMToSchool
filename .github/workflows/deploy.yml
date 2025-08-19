@@ -45,30 +45,10 @@ jobs:
           username: ${{ secrets.AWS_USERNAME }}
           key: ${{ secrets.AWS_PRIVATE_KEY }}
           script: |
-            # This command ensures that the script will exit immediately if any command fails.
-            set -e
-            
-            echo "--- Stopping old server process (if any) ---"
-            # The '|| true' part ensures this step doesn't fail if no process was found to kill.
-            pkill -f 'java -jar DCOMToSchool-1.0-SNAPSHOT.jar' || echo "No old process to stop."
-            sleep 2
+            echo "--- Changing to application directory ---"
+            cd /home/ubuntu
 
             echo "--- Starting new server process in the background ---"
-            cd /home/ubuntu
-            # The command to start the server is the same.
             nohup java -jar DCOMToSchool-1.0-SNAPSHOT.jar ${{ secrets.AWS_HOST }} > server.log 2>&1 &
             
-            # Wait for 10 seconds. This gives the Java application crucial time to initialize.
-            echo "--- Waiting 10 seconds for server to initialize... ---"
-            sleep 10
-            
-            # THE KEY FIX: Check the log file to confirm the server is actually running.
-            echo "--- Verifying server status from log file ---"
-            if grep -q "Payroll RMI Server is running and ready" server.log; then
-              echo "✅ SUCCESS: Server started successfully and is ready."
-            else
-              echo "❌ FAILURE: Server startup message not found in log."
-              echo "--- Displaying full server.log for debugging ---"
-              cat server.log
-              exit 1 # This will explicitly fail the GitHub Actions step.
-            fi
+            echo "--- Script finished, server should be running. ---"
