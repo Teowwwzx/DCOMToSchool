@@ -3,7 +3,7 @@ name: Build and Deploy Payroll Server
 # This workflow runs automatically every time you push to the 'main' branch
 on:
   push:
-    branches: [ main ]
+    branches: [ master ]
 
 # A workflow is made of one or more jobs that can run in parallel or sequentially
 jobs:
