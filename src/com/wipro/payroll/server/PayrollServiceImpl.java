@@ -14,12 +14,12 @@ import java.util.List;
 import java.util.Map;
 
 import com.wipro.payroll.common.*;
-import org.mindrot.jbcrypt.BCrypt;
 
 public class PayrollServiceImpl extends UnicastRemoteObject implements PayrollService {
+    private static final int RMI_OBJECT_PORT = 1100;
 
     public PayrollServiceImpl() throws RemoteException {
-        super();
+        super(RMI_OBJECT_PORT);
         System.out.println("✅ PayrollServiceImpl instance created and ready.");
     }
 
@@ -160,6 +160,35 @@ public class PayrollServiceImpl extends UnicastRemoteObject implements PayrollSe
     }
 
     @Override
+    public boolean deleteUser(int actorUserId, int userIdToDelete) throws RemoteException {
+        // Security Check for HR Role
+        try {
+            if (!checkUserRole(actorUserId, Role.HR)) {
+                throw new SecurityException("Access Denied: You do not have HR privileges.");
+            }
+        } catch (SQLException e) { throw new RemoteException("Could not verify permissions.", e); }
+
+        // Safety Check: Prevent an admin from deleting themselves
+        if (actorUserId == userIdToDelete) {
+            System.err.println("Attempt by user " + actorUserId + " to delete their own account blocked.");
+            return false;
+        }
+
+        String sql = "DELETE FROM public.\"user\" WHERE id = ?";
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, userIdToDelete);
+            int rowsAffected = ps.executeUpdate();
+            return rowsAffected > 0;
+        } catch (SQLException e) {
+            e.printStackTrace();
+            throw new RemoteException("Error deleting user.", e);
+        }
+    }
+
+
+
+    @Override
     public UserProfile getMyProfile(int userId) throws RemoteException {
         UserProfile userProfile = new UserProfile();
 
@@ -253,51 +282,6 @@ public class PayrollServiceImpl extends UnicastRemoteObject implements PayrollSe
             throw new RemoteException("Error fetching existing payroll periods.", e);
         }
         return periods;
-    }
-
-    @Override
-    public String getPayrollSummaryAsCsv(int actorUserId, int year, int month) throws RemoteException {
-        // Step 1: Security check for the HR role.
-        try {
-            if (!checkUserRole(actorUserId, Role.HR)) {
-                throw new SecurityException("Access Denied: You do not have HR privileges for this report.");
-            }
-        } catch (SQLException e) {
-            throw new RemoteException("Could not verify user permissions.", e);
-        }
-
-        // Step 2: Reuse our existing report method to get the data object.
-        // This is efficient because we don't have to query the database again.
-        PayrollSummaryReport report = getPayrollSummaryReport(actorUserId, year, month);
-
-        if (report == null || report.getNumberOfEmployeesPaid() == 0) {
-            return "No data available for the selected period to export.";
-        }
-
-        // Step 3: Build the CSV formatted string using a StringBuilder.
-        StringBuilder csvBuilder = new StringBuilder();
-
-        // Add a header row for the CSV file.
-        csvBuilder.append("Category,Value\n");
-
-        // Add rows for the main summary data.
-        csvBuilder.append("Pay Period,").append(report.getPayPeriod().toString(), 0, 7).append("\n");
-        csvBuilder.append("Employees Paid,").append(report.getNumberOfEmployeesPaid()).append("\n");
-        csvBuilder.append("Total Gross Earnings,").append(report.getTotalGrossEarnings()).append("\n");
-        csvBuilder.append("Total Deductions,").append(report.getTotalDeductions()).append("\n");
-        csvBuilder.append("Total Net Pay,").append(report.getTotalNetPay()).append("\n");
-
-        // Add a blank line and a header for the department breakdown.
-        csvBuilder.append("\n");
-        csvBuilder.append("Department,Net Pay (RM)\n");
-
-        // Add a row for each department from the map.
-        for (Map.Entry<String, BigDecimal> entry : report.getNetPayByDepartment().entrySet()) {
-            csvBuilder.append(entry.getKey()).append(",").append(entry.getValue()).append("\n");
-        }
-
-        // Step 4: Return the final string to the client.
-        return csvBuilder.toString();
     }
 
     // Emp
@@ -670,72 +654,6 @@ public class PayrollServiceImpl extends UnicastRemoteObject implements PayrollSe
         }
     }
 
-    @Override
-    public String runMonthlyPayroll(int actorUserId, int year, int month) throws RemoteException {
-        // 1. Security Check: Ensure the user is an HR admin
-        try {
-            if (!checkUserRole(actorUserId, Role.HR)) {
-                throw new SecurityException("Access Denied: You do not have HR privileges to run payroll.");
-            }
-        } catch (SQLException e) {
-            throw new RemoteException("Could not verify user permissions.", e);
-        }
-
-        // 2. Define the pay period for this run
-        LocalDate payPeriodStart = LocalDate.of(year, month, 1);
-        LocalDate payPeriodEnd = payPeriodStart.withDayOfMonth(payPeriodStart.lengthOfMonth());
-        System.out.printf("--- Starting Payroll Run for %d-%02d ---\n", year, month);
-
-        // 3. Get all employees to be paid (e.g., all 'ACTIVE' users)
-        List<User> employeesToPay = new ArrayList<>();
-        String fetchUsersSql = "SELECT id, username, f_name, l_name, job_title_id, emp_type_id FROM public.\"user\" WHERE status = 'ACTIVE'";
-        try (Connection conn = DatabaseManager.getConnection(); PreparedStatement ps = conn.prepareStatement(fetchUsersSql)) {
-            ResultSet rs = ps.executeQuery();
-            while (rs.next()) {
-                User u = new User();
-                u.setId(rs.getInt("id"));
-                u.setUsername(rs.getString("username"));
-                u.setJobTitleId(rs.getInt("job_title_id"));
-                u.setEmpTypeId(rs.getInt("emp_type_id"));
-                employeesToPay.add(u);
-            }
-        } catch (SQLException e) {
-            throw new RemoteException("Could not fetch list of employees.", e);
-        }
-
-        // 4. Process each employee one by one
-        int successCount = 0;
-        int failureCount = 0;
-        int skippedCount = 0;
-
-        for (User employee : employeesToPay) {
-            try (Connection conn = DatabaseManager.getConnection()) {
-                // Check if a payslip already exists for this user and period
-                String checkSql = "SELECT id FROM payslip WHERE user_id = ? AND pay_period_start_date = ?";
-                PreparedStatement checkPs = conn.prepareStatement(checkSql);
-                checkPs.setInt(1, employee.getId());
-                checkPs.setDate(2, java.sql.Date.valueOf(payPeriodStart));
-                if (checkPs.executeQuery().next()) {
-                    System.out.printf("Skipping %s: Payslip for this period already exists.\n", employee.getUsername());
-                    skippedCount++;
-                    continue; // Move to the next employee
-                }
-
-                // If it doesn't exist, process it
-                processPayrollForEmployee(employee, payPeriodStart, payPeriodEnd);
-                System.out.printf("Successfully processed payroll for: %s\n", employee.getUsername());
-                successCount++;
-            } catch (Exception e) {
-                System.err.printf("!!! FAILED to process payroll for %s: %s\n", employee.getUsername(), e.getMessage());
-                failureCount++;
-            }
-        }
-
-        String summary = String.format("Payroll run for %d-%02d complete. Processed: %d, Skipped: %d, Failed: %d.",
-                year, month, successCount, skippedCount, failureCount);
-        System.out.println(summary);
-        return summary;
-    }
 
     private void processPayrollForEmployee(User employee, LocalDate startDate, LocalDate endDate) throws SQLException {
         List<PayItem> finalPayItems = new ArrayList<>();
@@ -760,7 +678,23 @@ public class PayrollServiceImpl extends UnicastRemoteObject implements PayrollSe
                     }
                 }
 
-                // Step B: Calculate Gross Pay from EARNING rules
+                List<PayItem> variableItems = new ArrayList<>();
+                String bonusSql = "SELECT name, amount, type FROM bonuses WHERE user_id = ? AND pay_period_start_date = ? AND is_approved = true";
+                try (PreparedStatement ps = conn.prepareStatement(bonusSql)) {
+                    ps.setInt(1, employee.getId());
+                    ps.setDate(2, java.sql.Date.valueOf(startDate));
+                    ResultSet rs = ps.executeQuery();
+                    while (rs.next()) {
+                        PayItem bonusItem = new PayItem();
+                        bonusItem.setName(rs.getString("name"));
+                        bonusItem.setAmount(rs.getBigDecimal("amount"));
+                        bonusItem.setType(PayItemType.valueOf(rs.getString("type")));
+                        variableItems.add(bonusItem); // Add found bonuses to a temporary list
+                    }
+                }
+
+                // --- Step C: Calculate Gross Pay & build the final pay item list ---
+                // First, add all standard earnings from the templates
                 for (PayTemplate rule : rules.values()) {
                     if (rule.getType() == PayItemType.EARNING && !rule.getDescription().contains("Leave Entitlement")) {
                         grossPay = grossPay.add(rule.getAmount());
@@ -769,6 +703,13 @@ public class PayrollServiceImpl extends UnicastRemoteObject implements PayrollSe
                         earningItem.setType(PayItemType.EARNING);
                         earningItem.setAmount(rule.getAmount());
                         finalPayItems.add(earningItem);
+                    }
+                }
+                // NEXT, add all variable earnings (like bonuses) to the gross pay and the final list
+                for (PayItem varItem : variableItems) {
+                    if (varItem.getType() == PayItemType.EARNING) {
+                        grossPay = grossPay.add(varItem.getAmount());
+                        finalPayItems.add(varItem);
                     }
                 }
 
@@ -827,87 +768,72 @@ public class PayrollServiceImpl extends UnicastRemoteObject implements PayrollSe
         }
     }
 
+    @Override
+    public List<Department> getAllDepartments(int actorUserId) throws RemoteException {
+        // Add security check for HR role here
+        List<Department> departments = new ArrayList<>();
+        String sql = "SELECT id, name FROM public.departments ORDER BY name ASC";
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+                Department dept = new Department();
+                dept.setDeptId(rs.getInt("id"));
+                dept.setDeptName(rs.getString("name"));
+                departments.add(dept);
+            }
+        } catch (SQLException e) {
+            throw new RemoteException("Error fetching departments.", e);
+        }
+        return departments;
+    }
 
     @Override
-    public Payslip getPayslipForUser(int actorUserId, int targetUserId, int year, int month) throws RemoteException {
-        // Step 1: Security Check for HR role
-        try {
-            if (!checkUserRole(actorUserId, Role.HR)) {
-                throw new SecurityException("Access Denied: You do not have HR privileges to view payslips.");
+    public Department createDepartment(int actorUserId, Department newDepartment) throws RemoteException {
+        // Add security check for HR role here
+        String sql = "INSERT INTO public.departments (name) VALUES (?) RETURNING id";
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, newDepartment.getDeptName());
+            ResultSet rs = ps.executeQuery();
+            if (rs.next()) {
+                newDepartment.setDeptId(rs.getInt(1));
+                return newDepartment;
             }
         } catch (SQLException e) {
-            throw new RemoteException("Could not verify user permissions.", e);
+            // Handle unique constraint violation (duplicate name)
+            if (e.getSQLState().equals("23505")) {
+                throw new RemoteException("A department with that name already exists.");
+            }
+            throw new RemoteException("Error creating department.", e);
         }
-
-        // Step 2: Define the pay period we are searching for
-        LocalDate payPeriodStart = LocalDate.of(year, month, 1);
-        Payslip payslip = null;
-        int payslipId = -1;
-
-        // Step 3: Find the specific payslip's ID using the user and date
-        String findPayslipSql = "SELECT id FROM public.payslip WHERE user_id = ? AND pay_period_start_date = ?";
-
-        try (Connection conn = DatabaseManager.getConnection()) {
-            // First, execute the search to find the correct payslip
-            try (PreparedStatement ps = conn.prepareStatement(findPayslipSql)) {
-                ps.setInt(1, targetUserId);
-                ps.setDate(2, java.sql.Date.valueOf(payPeriodStart));
-                ResultSet rs = ps.executeQuery();
-                if (rs.next()) {
-                    payslipId = rs.getInt("id");
-                } else {
-                    return null; // No payslip found for that user and period
-                }
-            }
-
-            // Step 4: If we found a payslipId, fetch all its details
-            // This logic is identical to getMyLatestPayslip
-            String payslipDetailsSql = "SELECT * FROM payslip WHERE id = ?";
-            String itemsSql = "SELECT name, type, amount FROM pay_items WHERE payslip_id = ?";
-
-            payslip = new Payslip();
-            payslip.setId(payslipId);
-
-            try (PreparedStatement psPayslip = conn.prepareStatement(payslipDetailsSql)) {
-                psPayslip.setInt(1, payslipId);
-                ResultSet rsPayslip = psPayslip.executeQuery();
-                if(rsPayslip.next()) {
-                    payslip.setPayPeriodStartDate(rsPayslip.getDate("pay_period_start_date").toLocalDate());
-                    payslip.setPayPeriodEndDate(rsPayslip.getDate("pay_period_end_date").toLocalDate());
-                }
-            }
-
-            BigDecimal gross = BigDecimal.ZERO;
-            BigDecimal deductions = BigDecimal.ZERO;
-            try (PreparedStatement psItems = conn.prepareStatement(itemsSql)) {
-                psItems.setInt(1, payslipId);
-                ResultSet rsItems = psItems.executeQuery();
-                while (rsItems.next()) {
-                    PayItem item = new PayItem();
-                    item.setName(rsItems.getString("name"));
-                    item.setAmount(rsItems.getBigDecimal("amount"));
-                    PayItemType type = PayItemType.valueOf(rsItems.getString("type"));
-                    item.setType(type);
-                    payslip.getPayItems().add(item);
-
-                    if (type == PayItemType.EARNING) {
-                        gross = gross.add(item.getAmount());
-                    } else {
-                        deductions = deductions.add(item.getAmount());
-                    }
-                }
-            }
-            payslip.setGrossEarnings(gross);
-            payslip.setTotalDeductions(deductions);
-            payslip.setNetPay(gross.subtract(deductions));
-
-        } catch (SQLException e) {
-            e.printStackTrace();
-            throw new RemoteException("Error fetching payslip for user " + targetUserId, e);
-        }
-
-        return payslip;
+        return null;
     }
+
+    @Override
+    public JobTitle createJobTitle(int actorUserId, JobTitle newJobTitle) throws RemoteException {
+        // Add security check for HR role here
+        String sql = "INSERT INTO public.job_titles (dept_id, title, level) VALUES (?, ?, ?) RETURNING id";
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, newJobTitle.getDeptId());
+            ps.setString(2, newJobTitle.getTitle());
+            ps.setString(3, newJobTitle.getLevel());
+            ResultSet rs = ps.executeQuery();
+            if (rs.next()) {
+                newJobTitle.setId(rs.getInt(1));
+                return newJobTitle;
+            }
+        } catch (SQLException e) {
+            if (e.getSQLState().equals("23505")) {
+                throw new RemoteException("A job title with that name and level already exists in that department.");
+            }
+            throw new RemoteException("Error creating job title.", e);
+        }
+        return null;
+    }
+
+
 
     @Override
     public List<PayslipSummary> getAllPayslips(int actorUserId) throws RemoteException {
@@ -1053,6 +979,51 @@ public class PayrollServiceImpl extends UnicastRemoteObject implements PayrollSe
     // =================================================================
     //  MANAGER Administrator Methods
     // =================================================================
+    @Override
+    public Bonus createBonusesToEmployee(int actorUserId, Bonus newBonus) throws RemoteException {
+        try (Connection conn = DatabaseManager.getConnection()) {
+            // Security Check 1: Ensure the user is a Manager
+            if (!checkUserRole(actorUserId, Role.MANAGER)) {
+                throw new SecurityException("Access Denied: You do not have Manager privileges.");
+            }
+
+            // Security Check 2: Ensure the target employee is in the manager's department
+            if (!isUserInManagerDept(conn, actorUserId, newBonus.getUserId())) {
+                throw new SecurityException("Access Denied: You can only assign bonuses to employees in your own department.");
+            }
+
+            // If security checks pass, insert the bonus
+            String sql = "INSERT INTO public.bonuses (user_id, pay_period_start_date, name, type, amount, is_approved, approved_by_id) " +
+                    "VALUES (?, ?, ?, CAST(? AS pay_item_type_enum), ?, ?, ?) RETURNING id";
+
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setInt(1, newBonus.getUserId());
+                ps.setDate(2, java.sql.Date.valueOf(newBonus.getPayPeriodStartDate()));
+                ps.setString(3, newBonus.getName());
+                ps.setString(4, "EARNING"); // Bonuses are always an EARNING
+                ps.setBigDecimal(5, newBonus.getAmount());
+                ps.setBoolean(6, true); // Automatically approved by the assigning manager
+                ps.setInt(7, actorUserId);
+
+                ResultSet rs = ps.executeQuery();
+                if (rs.next()) {
+                    newBonus.setId(rs.getInt(1));
+                    return newBonus;
+                }
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+            throw new RemoteException("Database error while assigning bonus.", e);
+        }
+        return null;
+    }
+
+    // Add this new private helper for the security check
+    private boolean isUserInManagerDept(Connection conn, int managerId, int employeeId) throws SQLException {
+        int managerDept = getDepartmentIdForUser(conn, managerId);
+        int employeeDept = getDepartmentIdForUser(conn, employeeId);
+        return managerDept != -1 && managerDept == employeeDept;
+    }
 
     @Override
     public List<User> getMyDepartmentEmployees(int actorUserId) throws RemoteException {
@@ -1179,8 +1150,6 @@ public class PayrollServiceImpl extends UnicastRemoteObject implements PayrollSe
 
         return report;
     }
-
-    // Add these two new methods to your PayrollServiceImpl.java class
 
     @Override
     public List<Bonus> getUnapprovedBonusesForMyDepartment(int actorUserId) throws RemoteException {

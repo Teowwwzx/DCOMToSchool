@@ -16,7 +16,7 @@ public class JobTitle implements Serializable {
     public int getId() { return id; }
     public void setId(int id) { this.id = id; }
     public int getDeptId() { return deptId; }
-    public void setDeptId(int department_id) { this.deptId = department_id; }
+    public void setDeptId(int deptId) { this.deptId = deptId; }
     public String getTitle() { return title; }
     public void setTitle(String title) { this.title = title; }
     public String getLevel() { return level; }

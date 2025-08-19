@@ -8,6 +8,7 @@ import java.math.BigDecimal;
 import java.rmi.RemoteException;
 import java.rmi.registry.LocateRegistry;
 import java.rmi.registry.Registry;
+import java.time.LocalDate;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.Function;
@@ -17,8 +18,9 @@ public class Client {
     private static final Logger log = LoggerFactory.getLogger(Client.class);
     private static String[] SERVER_IPS = {
             "localhost",
-            "192.168.100.200",
-            "192.168.100.35",
+//            "47.129.38.215",
+//            "192.168.100.200",
+//            "192.168.100.35",
     };
     private static final int RMI_PORT = 1099;
     private static final String SERVICE_NAME = "PayrollService";
@@ -223,6 +225,10 @@ public class Client {
             System.out.println("1. View All Employees");
             System.out.println("2. Create New Employee");
             System.out.println("3. Edit Employee Details");
+            System.out.println("11. Delete Employee");
+
+            System.out.println("\n-- Organization Management --");
+            System.out.println("12. Manage Organization Department and Job Titles");
 
             System.out.println("\n-- Compensation Management --");
             System.out.println("4. Manage Pay Template");
@@ -267,6 +273,12 @@ public class Client {
                     handleCreateReport();
 //                    handleViewReports();
                     break;
+                case "11":
+                    handleDeleteUser();
+                    break;
+                case "12":
+                    handleManageOrganization();
+                    break;
                 case "9":
                     System.out.println("Switching to Employee View...");
                     showEmployeeMenu(true);
@@ -280,6 +292,107 @@ public class Client {
         }
     }
 
+    private static void handleManageOrganization() {
+        System.out.println("\n--- Manage Organization ---");
+        System.out.println("1. Create New Department");
+        System.out.println("2. Create New Job Title");
+        System.out.println("9. Return to Main Menu");
+
+        String choice = scanner.nextLine();
+
+        switch (choice) {
+            case "1":
+                handleCreateDept();
+                break;
+            case "2":
+                handleCreateJobTitle();
+                break;
+        }
+    }
+
+    private static void handleCreateJobTitle() {
+        System.out.println("\n--- Create New Department ---");
+        System.out.println("(Type '0' OR ':e' for exit OR ':q' for quit at any time to return to the menu)\n");
+
+        /// 1. Fetch necessary lists
+        List<Department> departments = executeWithResilience(s -> { try { return s.getAllDepartments(loggedInUser.getId()); } catch (RemoteException e) { throw new RuntimeException(e); }});
+        if (departments == null) { System.err.println("❌ Could not load departments. Aborting."); return; }
+
+        List<JobTitle> jobTitles = executeWithResilience(s -> { try { return s.getAllJobTitles(loggedInUser.getId()); } catch (RemoteException e) { throw new RuntimeException(e); }});
+        if (jobTitles == null) { System.err.println("❌ Could not load job titles. Aborting."); return; }
+
+        // 2. Get the details for the new job title
+        while(true) {
+            departments.forEach(dept -> System.out.printf("  ID: %d, Name: %s\n", dept.getDeptId(), dept.getDeptName()));
+            Integer deptId = promptForInteger("\nEnter the Department ID for a new job title: ", false);
+            if (deptId == null) return;
+
+            String title = promptForInput("Enter the job title (e.g., 'Developer'): ", ValidationType.LETTERS_ONLY);
+            if (title == null) return;
+
+            String level = promptForInput("Enter the job level (e.g., 'Junior', 'Senior', 'Lead'): ", ValidationType.LETTERS_ONLY);
+            if (level == null) return;
+
+            // CLIENT-SIDE VALIDATION: Check for duplicates before calling the server
+            final int finalDeptId = deptId;
+            final String finalTitle = title;
+            final String finalLevel = level;
+            if (jobTitles.stream().anyMatch(jt -> jt.getDeptId() == finalDeptId && jt.getTitle().equalsIgnoreCase(finalTitle) && jt.getLevel().equalsIgnoreCase(finalLevel))) {
+                System.err.println("❌ Error: That job title and level already exists in the selected department. Please try again.");
+                continue; // Ask again from the beginning
+            }
+
+            JobTitle newJobTitle = new JobTitle();
+            newJobTitle.setDeptId(deptId);
+            newJobTitle.setTitle(title);
+            newJobTitle.setLevel(level);
+
+            // 3. Make the resilient call to create it
+            JobTitle result = executeWithResilience(s -> { try { return s.createJobTitle(loggedInUser.getId(), newJobTitle); } catch (RemoteException e) { throw new RuntimeException(e); }});
+            if (result != null) {
+                System.out.println("✅ Job Title '" + result.getTitle() + "' created successfully with ID " + result.getId() + ".");
+            } else {
+                System.out.println("❌ Failed to create job title.");
+            }
+            break; // Exit the loop on success
+        }
+    }
+
+    private static void handleCreateDept() {
+        System.out.println("\n--- Create New Job Title ---");
+        System.out.println("(Type '0' OR ':e' for exit OR ':q' for quit at any time to return to the menu)");
+
+        // 1. Show existing list first to prevent duplicates
+        List<Department> departments = executeWithResilience(s -> { try { return s.getAllDepartments(loggedInUser.getId()); } catch (RemoteException e) { throw new RuntimeException(e); }});
+        if (departments == null) { System.err.println("❌ Could not load departments. Aborting."); return; }
+        System.out.println("\nExisting Departments: " + departments.stream().map(Department::getDeptName).collect(Collectors.joining(", ")));
+
+        // 2. Get details for the new department, with validation
+        while (true) {
+            String deptName = promptForInput("\nEnter new department name: ", ValidationType.LETTERS_ONLY);
+            if (deptName == null) return; // User cancelled
+
+            // CLIENT-SIDE VALIDATION: Check for duplicates before calling the server
+            final String finalDeptName = deptName;
+            if (departments.stream().anyMatch(d -> d.getDeptName().equalsIgnoreCase(finalDeptName))) {
+                System.err.println("❌ Error: A department with the name '" + deptName + "' already exists. Please try a different name.");
+                continue; // Ask again
+            }
+
+            Department newDepartment = new Department();
+            newDepartment.setDeptName(deptName);
+
+            // 3. Make the resilient call to create it
+            Department result = executeWithResilience(s -> { try { return s.createDepartment(loggedInUser.getId(), newDepartment); } catch (RemoteException e) { throw new RuntimeException(e); }});
+            if (result != null) {
+                System.out.println("✅ Department '" + result.getDeptName() + "' created successfully with ID " + result.getDeptId() + ".");
+            } else {
+                System.out.println("❌ Failed to create department. The server may be unavailable.");
+            }
+            break; // Exit the loop on success
+        }
+    }
+
     // =================================================================
     //  MANAGER Menu
     // =================================================================
@@ -288,6 +401,7 @@ public class Client {
             System.out.println("\n--- Manager Dashboard ---");
             System.out.println("1. View My Department Report");
             System.out.println("2. View Pending Bonuses");
+            System.out.println("3. Create Bonuses for Employees");
             System.out.println("8. Switch to Employee View");
             System.out.println("9. Logout");
             System.out.print("Choose an option: ");
@@ -300,6 +414,9 @@ public class Client {
                 case "2":
                     handleApproveBonuses();
                     break;
+                case "3":
+                    handleCreateBonuses();
+                    break;
                 case "8":
                     System.out.println("Switching to Employee View...");
                     showEmployeeMenu(true);
@@ -310,6 +427,60 @@ public class Client {
                 default:
                     System.out.println("Invalid option.");
             }
+        }
+    }
+
+    private static void handleCreateBonuses() {
+        System.out.println("\n--- Assign Bonus to Employee ---");
+        System.out.println("(Type '0' OR ':e' for exit OR ':q' for quit at any time to return to the menu)");
+
+        // 1. Show the manager who is on their team for easy selection
+        System.out.println("\nFetching your department's employees...");
+        List<User> employees = executeWithResilience(s -> { try { return s.getMyDepartmentEmployees(loggedInUser.getId()); } catch (RemoteException e) { throw new RuntimeException(e); }});
+        if (employees == null || employees.isEmpty()) {
+            System.out.println("Could not load your department's employees.");
+            return;
+        }
+        System.out.println("------------------------------------------");
+        System.out.printf("| %-4s | %-20s |\n", "ID", "Name");
+        System.out.println("------------------------------------------");
+        employees.forEach(e -> System.out.printf("| %-4d | %-20s |\n", e.getId(), e.getFName() + " " + e.getLName()));
+        System.out.println("------------------------------------------");
+
+        // 2. Get the details for the bonus from the manager
+        Integer targetUserId = promptForInteger("Enter the Employee ID to receive the bonus: ", false);
+        if (targetUserId == null) return;
+
+        // Client-side validation to ensure the ID is valid
+        final int finalTargetUserId = targetUserId;
+        if (employees.stream().noneMatch(e -> e.getId() == finalTargetUserId)) {
+            System.err.println("❌ Error: That ID does not belong to an employee in your department.");
+            return;
+        }
+
+        String bonusName = promptForInput("Enter the bonus description (e.g., 'Project Completion Bonus'): ", ValidationType.LETTERS_ONLY);
+        if (bonusName == null) return;
+
+        BigDecimal bonusAmount = promptForBigDecimal("Enter the bonus amount (e.g., 500.00): ");
+        if (bonusAmount == null) return;
+
+        Integer year = promptForInteger("Enter the Year of the pay period for this bonus: ", false);
+        if (year == null) return;
+        Integer month = promptForInteger("Enter the Month of the pay period for this bonus: ", false);
+        if (month == null) return;
+
+        // 3. Create the Bonus object and send it to the server
+        Bonus newBonus = new Bonus();
+        newBonus.setUserId(targetUserId);
+        newBonus.setName(bonusName);
+        newBonus.setAmount(bonusAmount);
+        newBonus.setPayPeriodStartDate(LocalDate.of(year, month, 1));
+
+        Bonus result = executeWithResilience(s -> { try { return s.createBonusesToEmployee(loggedInUser.getId(), newBonus); } catch (RemoteException e) { throw new RuntimeException(e); }});
+        if (result != null) {
+            System.out.println("✅ Bonus assigned successfully with ID " + result.getId() + ".");
+        } else {
+            System.out.println("❌ Failed to assign bonus. Please check the details and try again.");
         }
     }
 
@@ -447,14 +618,10 @@ public class Client {
         System.out.println("(Type '0' OR ':e' for exit OR ':q' for quit at any time to return to the menu)");
 
         try {
-            System.out.print("\nEnter the ID of the user you wish to edit: ");
-            String targetIdStr = scanner.nextLine();
-            if (targetIdStr.equalsIgnoreCase("cancel")) {
-                System.out.println("Operation cancelled.");
-                return;
-            }
-            int targetUserId = Integer.parseInt(targetIdStr);
+            handleViewUsers();
 
+            final Integer targetUserId = promptForInteger("Enter the ID of the user you wish to edit: ", false);
+            if (targetUserId == null) return;
 
             // 1. RESILIENTLY fetch the user's current details
             User userToEdit = executeWithResilience(service -> {
@@ -552,6 +719,39 @@ public class Client {
 
         } catch (NumberFormatException e) {
             System.err.println("❌ Invalid ID. Please enter a number.");
+        }
+    }
+
+    private static void handleDeleteUser() {
+        System.out.println("\n--- Delete Employee ---");
+        handleViewUsers(); // Show the list of users first
+
+        final Integer userIdToDelete = promptForInteger("\nEnter the ID of the user to DELETE: ", false);
+        if (userIdToDelete == null) return;
+
+        // Fetch the user's name for the confirmation message
+        User userToDelete = executeWithResilience(s -> { try { return s.readUserById(loggedInUser.getId(), userIdToDelete); } catch (RemoteException e) { throw new RuntimeException(e); }});
+        if (userToDelete == null) {
+            System.err.println("❌ User with ID " + userIdToDelete + " not found.");
+            return;
+        }
+
+        // Add a strong confirmation
+        System.out.println("\nWARNING: You are about to permanently delete the following user:");
+        System.out.printf("  ID: %d, Name: %s %s\n", userToDelete.getId(), userToDelete.getFName(), userToDelete.getLName());
+        System.out.println("\nThis action cannot be undone.");
+        System.out.print("\nType the user's username ('" + userToDelete.getUsername() + "') to confirm: ");
+        String confirmation = scanner.nextLine();
+
+        if (confirmation.equals(userToDelete.getUsername())) {
+            Boolean success = executeWithResilience(s -> { try { return s.deleteUser(loggedInUser.getId(), userIdToDelete); } catch (RemoteException e) { throw new RuntimeException(e); }});
+            if (success != null && success) {
+                System.out.println("✅ User successfully deleted.");
+            } else {
+                System.out.println("❌ User deletion failed.");
+            }
+        } else {
+            System.out.println("Confirmation text did not match. Deletion cancelled.");
         }
     }
 

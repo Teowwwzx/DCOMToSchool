@@ -1,0 +1,54 @@
+name: Build and Deploy Payroll Server
+
+# This workflow runs automatically every time you push to the 'main' branch
+on:
+  push:
+    branches: [ main ]
+
+# A workflow is made of one or more jobs that can run in parallel or sequentially
+jobs:
+  build-and-deploy:
+    # This job runs on a fresh virtual machine provided by GitHub
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Check out your repository's code
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Step 2: Set up the correct Java version (JDK 17)
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      # Step 3: Build the project with Maven, which creates our "fat JAR"
+      - name: Build with Maven
+        run: mvn clean package
+
+      # Step 4: Securely copy the new JAR file to your AWS server
+      - name: Copy JAR to EC2
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.AWS_HOST }}
+          username: ${{ secrets.AWS_USERNAME }}
+          key: ${{ secrets.AWS_PRIVATE_KEY }}
+          source: "target/DCOMToSchool-1.0-SNAPSHOT.jar" # Path to the built JAR
+          target: "/home/ubuntu/" # Destination on the server
+
+      # Step 5: Execute commands on the AWS server to restart the application
+      - name: Restart Server on EC2
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.AWS_HOST }}
+          username: ${{ secrets.AWS_USERNAME }}
+          key: ${{ secrets.AWS_PRIVATE_KEY }}
+          script: |
+            # Kill any old running server process. `pkill` is a simple way to do this.
+            # The `|| true` part ensures this step doesn't fail if no process was running.
+            pkill -f 'java -jar DCOMToSchool-1.0-SNAPSHOT.jar' || true
+
+            # Change to the correct directory and start the new server in the background
+            cd /home/ubuntu
+            nohup java -jar DCOMToSchool-1.0-SNAPSHOT.jar ${{ secrets.AWS_HOST }} > server.log 2>&1 &
