@@ -45,19 +45,30 @@ jobs:
           username: ${{ secrets.AWS_USERNAME }}
           key: ${{ secrets.AWS_PRIVATE_KEY }}
           script: |
-            # Kill any old running server process.
-            pkill -f 'java -jar DCOMToSchool-1.0-SNAPSHOT.jar' || true
+            # This command ensures that the script will exit immediately if any command fails.
+            set -e
             
-            # Wait for 2 seconds to ensure the old process is fully terminated.
+            echo "--- Stopping old server process (if any) ---"
+            # The '|| true' part ensures this step doesn't fail if no process was found to kill.
+            pkill -f 'java -jar DCOMToSchool-1.0-SNAPSHOT.jar' || echo "No old process to stop."
             sleep 2
 
-            # Change to the correct directory and start the new server in the background
+            echo "--- Starting new server process in the background ---"
             cd /home/ubuntu
-            
-            # Start the new server in the background using nohup.
+            # The command to start the server is the same.
             nohup java -jar DCOMToSchool-1.0-SNAPSHOT.jar ${{ secrets.AWS_HOST }} > server.log 2>&1 &
             
-            sleep 5
+            # Wait for 10 seconds. This gives the Java application crucial time to initialize.
+            echo "--- Waiting 10 seconds for server to initialize... ---"
+            sleep 10
             
-            echo "Verifying that the server process is running..."
-            ps aux | grep java
+            # THE KEY FIX: Check the log file to confirm the server is actually running.
+            echo "--- Verifying server status from log file ---"
+            if grep -q "Payroll RMI Server is running and ready" server.log; then
+              echo "✅ SUCCESS: Server started successfully and is ready."
+            else
+              echo "❌ FAILURE: Server startup message not found in log."
+              echo "--- Displaying full server.log for debugging ---"
+              cat server.log
+              exit 1 # This will explicitly fail the GitHub Actions step.
+            fi
