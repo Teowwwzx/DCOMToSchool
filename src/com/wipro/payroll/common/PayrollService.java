@@ -10,8 +10,9 @@ public interface PayrollService extends Remote {
     // =================================================================
     //  Authentication & Session
     // =================================================================
-     User login(String username, String password) throws RemoteException;
-//     void logout(int userId) throws RemoteException;
+    User login(String username, String password) throws RemoteException;
+    boolean verifyCurrentUserPassword(int actorUserId, String password) throws RemoteException;
+    Payslip getPayslipById(int actorUserId, int payslipId) throws RemoteException;
 
 
     // --- Employee Self-Service ---
@@ -39,6 +40,7 @@ public interface PayrollService extends Remote {
     // --- Payroll & Compensation (HR Role) ---
     List<PayTemplate> getPayTemplatesForJobTitle(int actorUserId, int jobTitleId) throws RemoteException;
     boolean updatePayTemplateItem(int actorUserId, int payTemplateItemId, BigDecimal newAmount) throws RemoteException;
+    List<String> getExistingPayrollPeriods(int actorUserId) throws RemoteException;
 
 
     List<JobTitle> getAllJobTitles(int userId) throws RemoteException;
@@ -62,4 +64,5 @@ public interface PayrollService extends Remote {
     List<Bonus> getUnapprovedBonusesForMyDepartment(int actorUserId) throws RemoteException;
     boolean approveBonus(int actorUserId, int bonusId) throws RemoteException;
 
+    String getPayrollSummaryAsCsv(int id, int year, int month) throws RemoteException;
 }

@@ -14,6 +14,8 @@ public class PayrollSummaryReport implements Serializable {
     private BigDecimal totalDeductions;
     private BigDecimal totalNetPay;
     private Map<String, BigDecimal> netPayByDepartment; // For a department-level breakdown
+    private BigDecimal estimatedEmployerContributions;
+    private BigDecimal totalCompanyPayout;
 
     public LocalDate getPayPeriod() {
         return payPeriod;
@@ -61,6 +63,22 @@ public class PayrollSummaryReport implements Serializable {
 
     public void setNetPayByDepartment(Map<String, BigDecimal> netPayByDepartment) {
         this.netPayByDepartment = netPayByDepartment;
+    }
+
+    public BigDecimal getEstimatedEmployerContributions() {
+        return estimatedEmployerContributions;
+    }
+
+    public void setEstimatedEmployerContributions(BigDecimal estimatedEmployerContributions) {
+        this.estimatedEmployerContributions = estimatedEmployerContributions;
+    }
+
+    public BigDecimal getTotalCompanyPayout() {
+        return totalCompanyPayout;
+    }
+
+    public void setTotalCompanyPayout(BigDecimal totalCompanyPayout) {
+        this.totalCompanyPayout = totalCompanyPayout;
     }
 
     // Add all getters and setters

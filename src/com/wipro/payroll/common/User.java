@@ -1,9 +1,6 @@
 package com.wipro.payroll.common;
 
 import java.io.Serializable;
-import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
 
 public class User implements Serializable {
     private static final long serialVersionUID = 1L;

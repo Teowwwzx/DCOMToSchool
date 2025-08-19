@@ -54,13 +54,6 @@ public class PayrollServiceImpl extends UnicastRemoteObject implements PayrollSe
                 if (roleStr != null) {
                     user.setRole(Role.valueOf(roleStr.toUpperCase()));
                 }
-
-                // You can also fetch and set the status if needed
-                // String statusStr = rs.getString("status");
-                // user.setStatus(UserStatus.valueOf(statusStr.toUpperCase()));
-
-                // Update last_login timestamp (optional but good practice)
-                // UPDATE public.user SET last_login = NOW() WHERE id = ?
             }
 
         } catch (SQLException e) {
@@ -90,6 +83,80 @@ public class PayrollServiceImpl extends UnicastRemoteObject implements PayrollSe
         } catch (Exception e) {
             throw new RuntimeException("Error hashing password", e);
         }
+    }
+
+    @Override
+    public boolean verifyCurrentUserPassword(int actorUserId, String password) throws RemoteException {
+        String storedHash = "";
+        String sql = "SELECT pwd_hash FROM public.\"user\" WHERE id = ?";
+
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, actorUserId);
+            ResultSet rs = ps.executeQuery();
+            if (rs.next()) {
+                storedHash = rs.getString("pwd_hash");
+            } else {
+                return false; // User not found
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+            throw new RemoteException("Database error verifying password.", e);
+        }
+
+        // Hash the provided password and compare it to the stored hash
+        String providedHash = hashPassword(password); // Reuse our existing helper
+        return providedHash.equals(storedHash);
+    }
+
+    @Override
+    public Payslip getPayslipById(int actorUserId, int payslipId) throws RemoteException {
+        // Add security check for HR role here
+        try {
+            return fetchFullPayslipDetails(payslipId);
+        } catch (SQLException e) {
+            throw new RemoteException("Error fetching payslip by ID.", e);
+        }
+    }
+
+    private Payslip fetchFullPayslipDetails(int payslipId) throws SQLException, RemoteException {
+        Payslip payslip = new Payslip();
+        String payslipDetailsSql = "SELECT * FROM payslip WHERE id = ?";
+        String itemsSql = "SELECT name, type, amount FROM pay_items WHERE payslip_id = ?";
+
+        try (Connection conn = DatabaseManager.getConnection()) {
+            try (PreparedStatement psPayslip = conn.prepareStatement(payslipDetailsSql)) {
+                psPayslip.setInt(1, payslipId);
+                ResultSet rsPayslip = psPayslip.executeQuery();
+                if (rsPayslip.next()) {
+                    payslip.setId(payslipId);
+                    payslip.setUserId(rsPayslip.getInt("user_id"));
+                    payslip.setPayPeriodStartDate(rsPayslip.getDate("pay_period_start_date").toLocalDate());
+                    payslip.setPayPeriodEndDate(rsPayslip.getDate("pay_period_end_date").toLocalDate());
+                    payslip.setGrossEarnings(rsPayslip.getBigDecimal("gross_earnings"));
+                    payslip.setTotalDeductions(rsPayslip.getBigDecimal("total_deductions"));
+                    payslip.setNetPay(rsPayslip.getBigDecimal("net_pay"));
+                } else {
+                    return null; // No payslip with this ID found
+                }
+            }
+
+            try (PreparedStatement psItems = conn.prepareStatement(itemsSql)) {
+                psItems.setInt(1, payslipId);
+                ResultSet rsItems = psItems.executeQuery();
+                while (rsItems.next()) {
+                    PayItem item = new PayItem();
+                    item.setName(rsItems.getString("name"));
+                    item.setAmount(rsItems.getBigDecimal("amount"));
+                    item.setType(PayItemType.valueOf(rsItems.getString("type")));
+                    payslip.getPayItems().add(item);
+                }
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+            throw e; // Re-throw to be handled by the calling method
+        }
+        return payslip;
     }
 
     @Override
@@ -143,69 +210,97 @@ public class PayrollServiceImpl extends UnicastRemoteObject implements PayrollSe
 
     @Override
     public Payslip getMyLatestPayslip(int userId) throws RemoteException {
-        Payslip payslip = null;
-        // First, find the ID of the most recent payslip for the user
         String latestPayslipIdSql = "SELECT id FROM payslip WHERE user_id = ? ORDER BY pay_period_end_date DESC LIMIT 1";
         int payslipId = -1;
 
-        try (Connection conn = DatabaseManager.getConnection()) {
-            try (PreparedStatement ps = conn.prepareStatement(latestPayslipIdSql)) {
-                ps.setInt(1, userId);
-                ResultSet rs = ps.executeQuery();
-                if (rs.next()) {
-                    payslipId = rs.getInt("id");
-                } else {
-                    return null; // No payslips found for this user
-                }
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement ps = conn.prepareStatement(latestPayslipIdSql)) {
+            ps.setInt(1, userId);
+            ResultSet rs = ps.executeQuery();
+            if (rs.next()) {
+                payslipId = rs.getInt("id");
+            } else {
+                return null; // No payslips found for this user
             }
-
-            // Now, fetch the full payslip and its items
-            String payslipSql = "SELECT * FROM payslip WHERE id = ?";
-            String itemsSql = "SELECT name, type, amount FROM pay_items WHERE payslip_id = ?";
-
-            payslip = new Payslip();
-            payslip.setId(payslipId);
-
-            try (PreparedStatement psPayslip = conn.prepareStatement(payslipSql)) {
-                psPayslip.setInt(1, payslipId);
-                ResultSet rsPayslip = psPayslip.executeQuery();
-                if(rsPayslip.next()) {
-                    payslip.setPayPeriodStartDate(rsPayslip.getDate("pay_period_start_date").toLocalDate());
-                    payslip.setPayPeriodEndDate(rsPayslip.getDate("pay_period_end_date").toLocalDate());
-                }
-            }
-
-            BigDecimal gross = BigDecimal.ZERO;
-            BigDecimal deductions = BigDecimal.ZERO;
-            try (PreparedStatement psItems = conn.prepareStatement(itemsSql)) {
-                psItems.setInt(1, payslipId);
-                ResultSet rsItems = psItems.executeQuery();
-                while (rsItems.next()) {
-                    PayItem item = new PayItem();
-                    item.setName(rsItems.getString("name"));
-                    item.setAmount(rsItems.getBigDecimal("amount"));
-                    PayItemType type = PayItemType.valueOf(rsItems.getString("type"));
-                    item.setType(type);
-                    payslip.getPayItems().add(item);
-
-                    if (type == PayItemType.EARNING) {
-                        gross = gross.add(item.getAmount());
-                    } else {
-                        deductions = deductions.add(item.getAmount());
-                    }
-                }
-            }
-            payslip.setGrossEarnings(gross);
-            payslip.setTotalDeductions(deductions);
-            payslip.setNetPay(gross.subtract(deductions));
-
         } catch (SQLException e) {
-            e.printStackTrace();
-            throw new RemoteException("Error fetching latest payslip", e);
+            throw new RemoteException("Error finding latest payslip.", e);
         }
-        return payslip;
+
+        // Now call the helper to get the full details
+        try {
+            return fetchFullPayslipDetails(payslipId);
+        } catch (SQLException e) {
+            throw new RemoteException("Error fetching latest payslip details.", e);
+        }
     }
 
+    @Override
+    public List<String> getExistingPayrollPeriods(int actorUserId) throws RemoteException {
+        // Add security check for HR role here
+        List<String> periods = new ArrayList<>();
+        // This query finds all unique YYYY-MM periods from the payslip table
+        String sql = "SELECT DISTINCT TO_CHAR(pay_period_start_date, 'YYYY-MM') AS period " +
+                "FROM public.payslip ORDER BY period DESC";
+
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+                periods.add(rs.getString("period"));
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+            throw new RemoteException("Error fetching existing payroll periods.", e);
+        }
+        return periods;
+    }
+
+    @Override
+    public String getPayrollSummaryAsCsv(int actorUserId, int year, int month) throws RemoteException {
+        // Step 1: Security check for the HR role.
+        try {
+            if (!checkUserRole(actorUserId, Role.HR)) {
+                throw new SecurityException("Access Denied: You do not have HR privileges for this report.");
+            }
+        } catch (SQLException e) {
+            throw new RemoteException("Could not verify user permissions.", e);
+        }
+
+        // Step 2: Reuse our existing report method to get the data object.
+        // This is efficient because we don't have to query the database again.
+        PayrollSummaryReport report = getPayrollSummaryReport(actorUserId, year, month);
+
+        if (report == null || report.getNumberOfEmployeesPaid() == 0) {
+            return "No data available for the selected period to export.";
+        }
+
+        // Step 3: Build the CSV formatted string using a StringBuilder.
+        StringBuilder csvBuilder = new StringBuilder();
+
+        // Add a header row for the CSV file.
+        csvBuilder.append("Category,Value\n");
+
+        // Add rows for the main summary data.
+        csvBuilder.append("Pay Period,").append(report.getPayPeriod().toString(), 0, 7).append("\n");
+        csvBuilder.append("Employees Paid,").append(report.getNumberOfEmployeesPaid()).append("\n");
+        csvBuilder.append("Total Gross Earnings,").append(report.getTotalGrossEarnings()).append("\n");
+        csvBuilder.append("Total Deductions,").append(report.getTotalDeductions()).append("\n");
+        csvBuilder.append("Total Net Pay,").append(report.getTotalNetPay()).append("\n");
+
+        // Add a blank line and a header for the department breakdown.
+        csvBuilder.append("\n");
+        csvBuilder.append("Department,Net Pay (RM)\n");
+
+        // Add a row for each department from the map.
+        for (Map.Entry<String, BigDecimal> entry : report.getNetPayByDepartment().entrySet()) {
+            csvBuilder.append(entry.getKey()).append(",").append(entry.getValue()).append("\n");
+        }
+
+        // Step 4: Return the final string to the client.
+        return csvBuilder.toString();
+    }
+
+    // Emp
     @Override
     public UserBankDetails getMyBankDetails(int userId) throws RemoteException {
         UserBankDetails details = null;
@@ -1053,6 +1148,15 @@ public class PayrollServiceImpl extends UnicastRemoteObject implements PayrollSe
                     report.setTotalGrossEarnings(rs.getBigDecimal("total_gross"));
                     report.setTotalDeductions(rs.getBigDecimal("total_deduct"));
                     report.setTotalNetPay(rs.getBigDecimal("total_net"));
+
+                    BigDecimal totalGross = report.getTotalGrossEarnings();
+                    if (totalGross != null) {
+                        // Estimate employer EPF contribution at 13%
+                        BigDecimal estimatedContributions = totalGross.multiply(new BigDecimal("0.13"));
+                        report.setEstimatedEmployerContributions(estimatedContributions);
+                        // Total Payout = Gross Pay + Employer Contributions
+                        report.setTotalCompanyPayout(totalGross.add(estimatedContributions));
+                    }
                 }
             }
 
