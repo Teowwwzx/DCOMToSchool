@@ -45,10 +45,19 @@ jobs:
           username: ${{ secrets.AWS_USERNAME }}
           key: ${{ secrets.AWS_PRIVATE_KEY }}
           script: |
-            # Kill any old running server process. `pkill` is a simple way to do this.
-            # The `|| true` part ensures this step doesn't fail if no process was running.
+            # Kill any old running server process.
             pkill -f 'java -jar DCOMToSchool-1.0-SNAPSHOT.jar' || true
+            
+            # Wait for 2 seconds to ensure the old process is fully terminated.
+            sleep 2
 
             # Change to the correct directory and start the new server in the background
             cd /home/ubuntu
+            
+            # Start the new server in the background using nohup.
             nohup java -jar DCOMToSchool-1.0-SNAPSHOT.jar ${{ secrets.AWS_HOST }} > server.log 2>&1 &
+            
+            sleep 5
+            
+            echo "Verifying that the server process is running..."
+            ps aux | grep java
