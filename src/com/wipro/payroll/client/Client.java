@@ -18,7 +18,7 @@ public class Client {
     private static final Logger log = LoggerFactory.getLogger(Client.class);
     private static String[] SERVER_IPS = {
             "47.129.38.215",
-            "localhost",
+//            "localhost",
     };
     private static final int RMI_PORT = 1099;
     private static final String SERVICE_NAME = "PayrollService";
