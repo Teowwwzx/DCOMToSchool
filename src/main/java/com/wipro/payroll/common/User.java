@@ -1,33 +1,56 @@
 package com.wipro.payroll.common;
 
+import jakarta.persistence.*;
 import java.io.Serializable;
 
+@Entity
+@Table(name = "users")
 public class User implements Serializable {
     private static final long serialVersionUID = 1L;
 
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private int id;
+    
     private int deptId;
+    
+    @Transient
     private String departmentName;
+    
     private int jobTitleId;
+    
+    @Transient
     private String jobTitle;
+    
     private int empTypeId;
+    
+    @Column(unique = true, nullable = false)
     private String username;
+    
     private String fName;
     private String lName;
+    
+    @Column(unique = true, nullable = false)
     private String email;
+    
     private String phone;
     private String ic;
+
+    @Enumerated(EnumType.STRING)
     private UserStatus status;
+
+    @Enumerated(EnumType.STRING)
     private Role role;
 
     public User() {}
 
+    // Getters and Setters
     public int getId() { return id; }
     public void setId(int id) { this.id = id; }
     public int getDeptId() { return deptId; }
+    public void setDeptId(int deptId) { this.deptId = deptId; }
     public String getDepartmentName() { return departmentName; }
     public void setDepartmentName(String departmentName) { this.departmentName = departmentName; }
-    public void setDeptId(int deptId) { this.deptId = deptId; }
     public int getJobTitleId() { return jobTitleId; }
     public void setJobTitleId(int jobTitleId) { this.jobTitleId = jobTitleId; }
     public String getJobTitle() { return jobTitle; }
