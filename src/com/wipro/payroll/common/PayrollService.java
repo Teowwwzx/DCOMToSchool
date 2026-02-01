@@ -14,7 +14,7 @@ public interface PayrollService extends Remote {
     boolean verifyCurrentUserPassword(int actorUserId, String password) throws RemoteException;
     Payslip getPayslipById(int actorUserId, int payslipId) throws RemoteException;
 
-    // --- Employee Self-Service ---
+    // Employee Self-Service
     UserProfile getMyProfile(int userId) throws RemoteException;
     Payslip getMyLatestPayslip(int userId) throws RemoteException;
     UserBankDetails getMyBankDetails(int userId) throws RemoteException;
@@ -37,17 +37,16 @@ public interface PayrollService extends Remote {
     Department createDepartment(int actorUserId, Department newDepartment) throws RemoteException;
     JobTitle createJobTitle(int actorUserId, JobTitle newJobTitle) throws RemoteException;
 
-    // --- Payroll & Compensation (HR Role) ---
+    // Payroll & Compensation (HR Role)
     List<PayTemplate> getPayTemplatesForJobTitle(int actorUserId, int jobTitleId) throws RemoteException;
     boolean updatePayTemplateItem(int actorUserId, int payTemplateItemId, BigDecimal newAmount) throws RemoteException;
     List<String> getExistingPayrollPeriods(int actorUserId) throws RemoteException;
 
     List<JobTitle> getAllJobTitles(int userId) throws RemoteException;
     List<EmpType> getAllEmpTypes(int userId) throws RemoteException;
-
     List<Bonus> getAllPendingBonuses(int actorUserId) throws RemoteException;
 
-    //    Pay Template
+    // Pay Template
     PayTemplate addPayTemplateItem(int userId, PayTemplate newItem) throws RemoteException;
     boolean deletePayTemplateItem(int userId, int payTemplateItemId) throws RemoteException;
 

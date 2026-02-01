@@ -1,18 +1,10 @@
 package com.wipro.payroll.server;
-
-import org.mindrot.jbcrypt.BCrypt;
-
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.security.MessageDigest;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
-import java.sql.Date;
-import java.sql.Timestamp;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
 
 /**
  * A utility class to seed the database with initial sample data from Java.
@@ -150,16 +142,12 @@ public class DataSeeder {
         executeSql(conn, "INSERT INTO \"user_bank_details\" (user_id, bank_name, acc_no, acc_name) VALUES (1, 'HSBC', '300123456789', 'Maria Chen'), (2, 'Maybank', '112233445566', 'Henry Tan'), (3, 'CIMB', '778899001122', 'Eddie Ng');");
     }
 
-    // Helper method to execute simple SQL statements
     private static void executeSql(Connection conn, String sql) throws SQLException {
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.executeUpdate();
         }
     }
 
-    /**
-     * MODIFIED: Added SHA-256 hashing method to match login logic.
-     */
     private static String hashPassword(String password) {
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
@@ -222,6 +210,5 @@ public class DataSeeder {
             stmt.executeQuery();
         }
     }
-
 
 }

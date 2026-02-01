@@ -17,8 +17,9 @@ import java.util.stream.Collectors;
 public class Client {
     private static final Logger log = LoggerFactory.getLogger(Client.class);
     private static String[] SERVER_IPS = {
-            "47.129.38.215",
-//            "localhost",
+            "localhost",
+            "192.168.233.80",
+            "47.129.38.215"
     };
     private static final int RMI_PORT = 1099;
     private static final String SERVICE_NAME = "PayrollService";
@@ -425,60 +426,6 @@ public class Client {
                 default:
                     System.out.println("Invalid option.");
             }
-        }
-    }
-
-    private static void handleCreateBonuses() {
-        System.out.println("\n--- Assign Bonus to Employee ---");
-        System.out.println("(Type '0' OR ':e' for exit OR ':q' for quit at any time to return to the menu)");
-
-        // 1. Show the manager who is on their team for easy selection
-        System.out.println("\nFetching your department's employees...");
-        List<User> employees = executeWithResilience(s -> { try { return s.getMyDepartmentEmployees(loggedInUser.getId()); } catch (RemoteException e) { throw new RuntimeException(e); }});
-        if (employees == null || employees.isEmpty()) {
-            System.out.println("Could not load your department's employees.");
-            return;
-        }
-        System.out.println("------------------------------------------");
-        System.out.printf("| %-4s | %-20s |\n", "ID", "Name");
-        System.out.println("------------------------------------------");
-        employees.forEach(e -> System.out.printf("| %-4d | %-20s |\n", e.getId(), e.getFName() + " " + e.getLName()));
-        System.out.println("------------------------------------------");
-
-        // 2. Get the details for the bonus from the manager
-        Integer targetUserId = promptForInteger("Enter the Employee ID to receive the bonus: ", false);
-        if (targetUserId == null) return;
-
-        // Client-side validation to ensure the ID is valid
-        final int finalTargetUserId = targetUserId;
-        if (employees.stream().noneMatch(e -> e.getId() == finalTargetUserId)) {
-            System.err.println("❌ Error: That ID does not belong to an employee in your department.");
-            return;
-        }
-
-        String bonusName = promptForInput("Enter the bonus description (e.g., 'Project Completion Bonus'): ", ValidationType.LETTERS_ONLY);
-        if (bonusName == null) return;
-
-        BigDecimal bonusAmount = promptForBigDecimal("Enter the bonus amount (e.g., 500.00): ");
-        if (bonusAmount == null) return;
-
-        Integer year = promptForInteger("Enter the Year of the pay period for this bonus: ", false);
-        if (year == null) return;
-        Integer month = promptForInteger("Enter the Month of the pay period for this bonus: ", false);
-        if (month == null) return;
-
-        // 3. Create the Bonus object and send it to the server
-        Bonus newBonus = new Bonus();
-        newBonus.setUserId(targetUserId);
-        newBonus.setName(bonusName);
-        newBonus.setAmount(bonusAmount);
-        newBonus.setPayPeriodStartDate(LocalDate.of(year, month, 1));
-
-        Bonus result = executeWithResilience(s -> { try { return s.createBonusesToEmployee(loggedInUser.getId(), newBonus); } catch (RemoteException e) { throw new RuntimeException(e); }});
-        if (result != null) {
-            System.out.println("✅ Bonus assigned successfully with ID " + result.getId() + ".");
-        } else {
-            System.out.println("❌ Failed to assign bonus. Please check the details and try again.");
         }
     }
 
@@ -1049,7 +996,6 @@ public class Client {
     private static void handleViewBonuses() {
         System.out.println("\n--- Report: All Pending Bonus Approvals ---");
 
-        // RESILIENT CALL to the server
         List<Bonus> pendingBonuses = executeWithResilience(service -> {
             try {
                 return service.getAllPendingBonuses(loggedInUser.getId());
@@ -1211,7 +1157,6 @@ public class Client {
     private static void handleViewDepartmentReport() {
         System.out.println("\nFetching your department report...");
 
-        // RESILIENT CALL
         List<User> employees = executeWithResilience(service -> {
             try { return service.getMyDepartmentEmployees(loggedInUser.getId()); }
             catch (RemoteException e) { throw new RuntimeException(e); }
@@ -1243,11 +1188,64 @@ public class Client {
         System.out.println(employees.size() + " employee(s) in your department.");
     }
 
+    private static void handleCreateBonuses() {
+        System.out.println("\n--- Assign Bonus to Employee ---");
+        System.out.println("(Type '0' OR ':e' for exit OR ':q' for quit at any time to return to the menu)");
+
+        // 1. Show the manager who is on their team for easy selection
+        System.out.println("\nFetching your department's employees...");
+        List<User> employees = executeWithResilience(s -> { try { return s.getMyDepartmentEmployees(loggedInUser.getId()); } catch (RemoteException e) { throw new RuntimeException(e); }});
+        if (employees == null || employees.isEmpty()) {
+            System.out.println("Could not load your department's employees.");
+            return;
+        }
+        System.out.println("------------------------------------------");
+        System.out.printf("| %-4s | %-20s |\n", "ID", "Name");
+        System.out.println("------------------------------------------");
+        employees.forEach(e -> System.out.printf("| %-4d | %-20s |\n", e.getId(), e.getFName() + " " + e.getLName()));
+        System.out.println("------------------------------------------");
+
+        // 2. Get the details for the bonus from the manager
+        Integer targetUserId = promptForInteger("Enter the Employee ID to receive the bonus: ", false);
+        if (targetUserId == null) return;
+
+        // Client-side validation to ensure the ID is valid
+        final int finalTargetUserId = targetUserId;
+        if (employees.stream().noneMatch(e -> e.getId() == finalTargetUserId)) {
+            System.err.println("❌ Error: That ID does not belong to an employee in your department.");
+            return;
+        }
+
+        String bonusName = promptForInput("Enter the bonus description (e.g., 'Project Completion Bonus'): ", ValidationType.LETTERS_ONLY);
+        if (bonusName == null) return;
+
+        BigDecimal bonusAmount = promptForBigDecimal("Enter the bonus amount (e.g., 500.00): ");
+        if (bonusAmount == null) return;
+
+        Integer year = promptForInteger("Enter the Year of the pay period for this bonus: ", false);
+        if (year == null) return;
+        Integer month = promptForInteger("Enter the Month of the pay period for this bonus: ", false);
+        if (month == null) return;
+
+        // 3. Create the Bonus object and send it to the server
+        Bonus newBonus = new Bonus();
+        newBonus.setUserId(targetUserId);
+        newBonus.setName(bonusName);
+        newBonus.setAmount(bonusAmount);
+        newBonus.setPayPeriodStartDate(LocalDate.of(year, month, 1));
+
+        Bonus result = executeWithResilience(s -> { try { return s.createBonusesToEmployee(loggedInUser.getId(), newBonus); } catch (RemoteException e) { throw new RuntimeException(e); }});
+        if (result != null) {
+            System.out.println("✅ Bonus assigned successfully with ID " + result.getId() + ".");
+        } else {
+            System.out.println("❌ Failed to assign bonus. Please check the details and try again.");
+        }
+    }
+
     private static void handleApproveBonuses() {
         System.out.println("\n--- Approve Pending Bonuses ---");
         System.out.println("(Type '0' OR ':e' for exit OR ':q' for quit at any time to return to the menu)\n");
 
-        // 1. Resiliently fetch the list of unapproved bonuses
         List<Bonus> pendingBonuses = executeWithResilience(service -> {
             try { return service.getUnapprovedBonusesForMyDepartment(loggedInUser.getId()); }
             catch (RemoteException e) { throw new RuntimeException(e); }
@@ -1484,7 +1482,6 @@ public class Client {
             System.out.print(prompt);
             String input = scanner.nextLine();
 
-            // CHECK FOR CANCEL: The user can exit by typing 'cancel'
             if (input.equalsIgnoreCase(":q") || input.equalsIgnoreCase(":e") || input.equalsIgnoreCase("0")) {
                 System.out.println("Operation cancelled.");
                 return null;
@@ -1505,7 +1502,7 @@ public class Client {
                 continue;
             }
 
-            return input; // Input is valid
+            return input;
         }
     }
 
