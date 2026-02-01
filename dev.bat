@@ -1,0 +1,3 @@
+@echo off
+echo Starting DCOMToSchool in DEV mode...
+.\mvnw.cmd spring-boot:run -Dspring-boot.run.profiles=dev
